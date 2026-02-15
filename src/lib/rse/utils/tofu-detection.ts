@@ -15,17 +15,17 @@
  * Result of tofu detection analysis
  */
 export interface TofuDetectionResult {
-  /** Whether tofu pattern was found */
+  /** Whether tofu pattern was detected (based on configured thresholds) */
   isMatch: boolean;
-  /** Best match ratio found (0-1) */
+  /** Best match ratio found (0-1) - percentage of matching pixels */
   matchRatio: number;
-  /** Position where best match was found */
+  /** Position where best match was found (for debugging/bounding box) */
   matchPosition: { x: number; y: number } | null;
-  /** Number of black pixels in tofu signature */
+  /** Number of black pixels in tofu signature (constant per font size) */
   tofuPixelCount: number;
   /** Number of black pixels in rendered glyph */
   renderedPixelCount: number;
-  /** Ratio of rendered to tofu black pixels */
+  /** Ratio: renderedPixelCount / tofuPixelCount (1.0 = identical pixel count) */
   blackPixelRatio: number;
 }
 
@@ -33,19 +33,34 @@ export interface TofuDetectionResult {
  * Options for tofu detection
  */
 export interface TofuDetectionOptions {
-  /** Minimum match ratio to consider as tofu (default: 0.98) */
+  /** Minimum match ratio to consider as tofu (default: 0.92)
+   * Pixel-by-pixel similarity - how many pixels match between rendered glyph and tofu signature.
+   * Higher values require more identical pixels.
+   */
   matchThreshold?: number;
-  /** Minimum black pixel ratio for tofu detection (default: 0.5) */
+  /** Minimum black pixel ratio for tofu detection (default: 0.5)
+   * Ensures the rendered glyph has roughly the same amount of "ink" as the tofu signature.
+   * Prevents false positives from blank or nearly-blank glyphs that might coincidentally match.
+   * Calculated as: renderedBlackPixels / tofuSignatureBlackPixels
+   */
   blackPixelThreshold?: number;
-  /** Whether to require both thresholds (conservative mode, default: true) */
+  /** Whether to require both thresholds (conservative mode, default: true)
+   * When true, BOTH matchThreshold AND blackPixelThreshold must pass.
+   * When false, EITHER threshold passing is sufficient (more permissive).
+   */
   requireBothThresholds?: boolean;
 }
 
 /**
  * Default detection options
+ *
+ * These thresholds were tuned empirically:
+ * - 92% match: Allows for minor rendering differences while still detecting tofu
+ * - 50% black pixel: Ensures the glyph has similar pixel density to tofu signature
+ * - Both required: Conservative mode to minimize false positives
  */
 const DEFAULT_OPTIONS: Required<TofuDetectionOptions> = {
-  matchThreshold: 0.98,
+  matchThreshold: 0.92,
   blackPixelThreshold: 0.5,
   requireBothThresholds: true,
 };
