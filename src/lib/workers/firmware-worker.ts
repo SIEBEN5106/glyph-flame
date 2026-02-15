@@ -16,7 +16,7 @@ import { validateBitmapData, encodeV8 } from "../rse/utils/font-encoder";
 import { buildBitmapListFromMetadata } from "../rse/utils/metadata";
 import { convertToBmp, isValidFontData } from "../rse/utils/bitmap";
 import { renderWithTofuPipeline, TOFU_SCALE, TOFU_PADDING, imageDataToPixels } from "../rse/utils/glyph-renderer";
-import { detectTofuPattern } from "../rse/utils/tofu-detection";
+import { detectTofuPattern, TOFU_MATCH_THRESHOLD, TOFU_BLACK_PIXEL_THRESHOLD } from "../rse/utils/tofu-detection";
 
 // Constants
 const SMALL_STRIDE = 32;
@@ -1813,10 +1813,10 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
               console.log(`[replaceFontsWorker] U+${unicode.toString(16).toUpperCase().padStart(4, '0')} "${char}": tofuBlack=${tofuBlackCount}, charBlack=${charBlackPixels}, bestMatch=${(bestMatchRatio * 100).toFixed(1)}% @ (${bestMatchPos.x},${bestMatchPos.y})`);
             }
 
-            // If tofu (98%+ match AND has similar black pixel count), skip
+            // If tofu (92%+ match AND has similar black pixel count), skip
             // This prevents blank/missing glyphs from being marked as tofu
             const blackPixelRatio = tofuBlackCount > 0 ? charBlackPixels / tofuBlackCount : 0;
-            const isTofuMatch = bestMatchRatio >= 0.98 && blackPixelRatio > 0.5;
+            const isTofuMatch = bestMatchRatio >= TOFU_MATCH_THRESHOLD && blackPixelRatio > TOFU_BLACK_PIXEL_THRESHOLD;
 
             if (isTofuMatch) {
               // Debug output for tofu match

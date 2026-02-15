@@ -21,7 +21,7 @@ import {
 import {
   detectTofuPattern,
   findBoundingBox,
-  type TofuDetectionResult,
+  DEFAULT_TOFU_OPTIONS,
 } from "./tofu-detection";
 
 /**
@@ -294,13 +294,13 @@ export interface PatternScanResult extends ReturnType<typeof detectTofuPattern> 
  *
  * @param rendered - Rendered pixel grid from user font (full padded canvas)
  * @param pattern - 4x tofu pattern to scan for
- * @param matchThreshold - Minimum match ratio to consider it tofu (default 0.98)
+ * @param matchThreshold - Minimum match ratio to consider it tofu (default from tofu-detection.ts)
  * @returns PatternScanResult with match status, ratio, position, and pixel counts
  */
 export function scanForTofuPattern(
   rendered: boolean[][],
   pattern: boolean[][],
-  matchThreshold = 0.98,
+  matchThreshold = DEFAULT_TOFU_OPTIONS.matchThreshold,
 ): ReturnType<typeof detectTofuPattern> {
   return detectTofuPattern(rendered, pattern, { matchThreshold });
 }

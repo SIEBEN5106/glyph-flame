@@ -52,17 +52,24 @@ export interface TofuDetectionOptions {
 }
 
 /**
- * Default detection options
+ * Default detection thresholds
  *
  * These thresholds were tuned empirically:
  * - 92% match: Allows for minor rendering differences while still detecting tofu
- * - 50% black pixel: Ensures the glyph has similar pixel density to tofu signature
+ * - 50% black pixel: Ensures the glyph has similar pixel density as tofu signature
  * - Both required: Conservative mode to minimize false positives
  */
-const DEFAULT_OPTIONS: Required<TofuDetectionOptions> = {
-  matchThreshold: 0.92,
-  blackPixelThreshold: 0.5,
-  requireBothThresholds: true,
+export const TOFU_MATCH_THRESHOLD = 0.92;
+export const TOFU_BLACK_PIXEL_THRESHOLD = 0.5;
+export const TOFU_REQUIRE_BOTH = true;
+
+/**
+ * Default detection options (exported for reuse)
+ */
+export const DEFAULT_TOFU_OPTIONS: Required<TofuDetectionOptions> = {
+  matchThreshold: TOFU_MATCH_THRESHOLD,
+  blackPixelThreshold: TOFU_BLACK_PIXEL_THRESHOLD,
+  requireBothThresholds: TOFU_REQUIRE_BOTH,
 };
 
 /**
@@ -133,7 +140,7 @@ export function detectTofuPattern(
   tofuPattern: boolean[][],
   options?: TofuDetectionOptions,
 ): TofuDetectionResult {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const opts = { ...DEFAULT_TOFU_OPTIONS, ...options };
 
   const patternHeight = tofuPattern.length;
   const patternWidth = tofuPattern[0]?.length || 4;
