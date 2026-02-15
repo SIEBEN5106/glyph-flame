@@ -16,6 +16,7 @@ import { validateBitmapData, encodeV8 } from "../rse/utils/font-encoder";
 import { buildBitmapListFromMetadata } from "../rse/utils/metadata";
 import { convertToBmp, isValidFontData } from "../rse/utils/bitmap";
 import { renderWithTofuPipeline, TOFU_SCALE, TOFU_PADDING, imageDataToPixels } from "../rse/utils/glyph-renderer";
+import { detectTofuPattern } from "../rse/utils/tofu-detection";
 
 // Constants
 const SMALL_STRIDE = 32;
@@ -1477,56 +1478,11 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             const imageData = ctx!.getImageData(0, 0, canvas.width, canvas.height);
             const pixels = imageDataToPixels(imageData, 128);
 
-            // Get tofu signature
-            const tofuPattern = tofuSigForWorker;
-
-            // Pattern matching - find best match position and ratio
-            const patternSize = fontSize * TOFU_SCALE;
-            let bestMatchRatio = 0;
-            let bestStartY = 0, bestStartX = 0;
-
-            for (let startY = 0; startY <= canvasSize - patternSize; startY++) {
-              for (let startX = 0; startX <= canvasSize - patternSize; startX++) {
-                let matches = 0;
-                let total = 0;
-                for (let py = 0; py < patternSize; py++) {
-                  for (let px = 0; px < patternSize; px++) {
-                    if (pixels[startY + py]?.[startX + px] === tofuPattern[py]?.[px]) {
-                      matches++;
-                    }
-                    total++;
-                  }
-                }
-                const ratio = matches / total;
-                if (ratio > bestMatchRatio) {
-                  bestMatchRatio = ratio;
-                  bestStartY = startY;
-                  bestStartX = startX;
-                }
-              }
-            }
-
-            // Count tofu black pixels
-            let tofuBlackCount = 0;
-            for (const row of tofuPattern) {
-              for (const p of row) {
-                if (p) tofuBlackCount++;
-              }
-            }
-
-            // Count rendered char black pixels
-            let charBlackCount = 0;
-            for (let y = 0; y < canvasSize; y++) {
-              for (let x = 0; x < canvasSize; x++) {
-                if (pixels[y]?.[x]) charBlackCount++;
-              }
-            }
-
-            // Check if tofu
-            const blackPixelRatio = tofuBlackCount > 0 ? charBlackCount / tofuBlackCount : 0;
-            const isTofu = bestMatchRatio >= 0.98 && blackPixelRatio > 0.5;
+            // Use shared tofu detection algorithm
+            const result = detectTofuPattern(pixels, tofuSigForWorker);
 
             // Extract rendered pixels (center crop like tofu pattern)
+            const patternSize = fontSize * TOFU_SCALE;
             const renderedPattern: boolean[][] = [];
             for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
               const row: boolean[] = [];
@@ -1536,16 +1492,20 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
               renderedPattern.push(row);
             }
 
+            // Bounding box for the best match position
+            const bbox1 = result.matchPosition
+              ? { x: result.matchPosition.x, y: result.matchPosition.y, width: patternSize, height: patternSize }
+              : { x: 0, y: 0, width: patternSize, height: patternSize };
+
             return {
               codePoint,
               char,
               fontSize,
               renderedPixels: renderedPattern,
-              tofuPixels: tofuPattern,
-              match: isTofu,
-              matchPercentage: bestMatchRatio * 100,
-              // Bounding boxes for debug display
-              boundingBox1: { x: bestStartX, y: bestStartY, width: patternSize, height: patternSize },
+              tofuPixels: tofuSigForWorker,
+              match: result.isMatch,
+              matchPercentage: result.matchRatio * 100,
+              boundingBox1: bbox1,
               boundingBox2: { x: 0, y: 0, width: 0, height: 0 }, // Not needed in worker
             };
           }
