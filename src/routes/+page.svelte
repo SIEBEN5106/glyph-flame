@@ -1181,7 +1181,9 @@
       return;
     }
 
-    const { fontFamily, fontSize, fontType, codePoints } = pendingReplacement;
+    // Extract values - use structuredClone to get plain objects from Svelte 5 proxies
+    const pr = structuredClone(pendingReplacement);
+    const { fontFamily, fontSize, fontType, codePoints } = pr;
     pendingReplacement = null;
     showTofuDebug = false;
 

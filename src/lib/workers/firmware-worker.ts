@@ -1940,11 +1940,21 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             firmwareLength: resultFirmware.length,
           });
 
+          // Convert Map to plain object for postMessage serialization
+          const skippedReasonsPlain: Record<number, string> = {};
+          for (const [key, value] of results.skippedReasons) {
+            skippedReasonsPlain[key] = value;
+          }
+
           self.postMessage({
             type: "success",
             id,
             result: {
-              ...results,
+              successCount: results.successCount,
+              skippedCharacters: results.skippedCharacters,
+              skippedReasons: skippedReasonsPlain,
+              errors: results.errors,
+              replacedCharacters: results.replacedCharacters,
               firmware: resultFirmware,
               fontType,
             },
