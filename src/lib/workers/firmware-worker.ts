@@ -1730,6 +1730,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             replacedCharacters: [] as number[],
             successCount: 0,
             skippedCharacters: [] as number[],
+            skippedReasons: new Map<number, string>(),
             errors: [] as string[],
           };
 
@@ -1904,6 +1905,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
 
             if (!pixels) {
               results.skippedCharacters.push(unicode);
+              results.skippedReasons.set(unicode, "tofu_detected");
               continue;
             }
 
@@ -1911,11 +1913,13 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             const addrInfo = getFontAddress(unicode, fontType, SMALL_BASE, LARGE_BASE);
             if (!addrInfo.valid) {
               results.skippedCharacters.push(unicode);
+              results.skippedReasons.set(unicode, "invalid_address");
               continue;
             }
 
             if (addrInfo.addr + addrInfo.stride > firmwareData!.length) {
               results.skippedCharacters.push(unicode);
+              results.skippedReasons.set(unicode, "address_out_of_bounds");
               continue;
             }
 
@@ -1962,9 +1966,17 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
 
           // Return final firmware
           const resultFirmware = firmwareData!.slice(0);
+
+          // Count skip reasons for logging
+          const skipReasonCounts = new Map<string, number>();
+          for (const reason of results.skippedReasons.values()) {
+            skipReasonCounts.set(reason, (skipReasonCounts.get(reason) ?? 0) + 1);
+          }
+
           console.log("[replaceFontsWorker] Sending success result:", {
             successCount: results.successCount,
             skippedCount: results.skippedCharacters.length,
+            skippedReasons: Object.fromEntries(skipReasonCounts),
             firmwareLength: resultFirmware.length,
           });
 
