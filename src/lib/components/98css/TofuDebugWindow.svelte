@@ -63,9 +63,9 @@
                 </span>
                 <span class="match-result">
                   {#if item.match}
-                    <span class="pass-label">TOFU DETECTED ({(item.matchPercentage * 100).toFixed(1)}%)</span>
+                    <span class="pass-label">TOFU DETECTED ({(item.matchPercentage).toFixed(1)}%)</span>
                   {:else}
-                    <span class="fail-label">NOT TOFU ({(item.matchPercentage * 100).toFixed(1)}%)</span>
+                    <span class="fail-label">NOT TOFU ({(item.matchPercentage).toFixed(1)}%)</span>
                   {/if}
                 </span>
               </div>
