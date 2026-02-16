@@ -3,7 +3,6 @@
   import { debugMode, debugAnimationComplete } from "$lib/stores";
   import Window from "./Window.svelte";
   import WindowBody from "./WindowBody.svelte";
-  import StatusBar from "./StatusBar.svelte";
   import ProgressBar from "./ProgressBar.svelte";
 
   interface StatusField {
@@ -16,6 +15,7 @@
     message?: string;
     progress?: number;
     showProgress?: boolean;
+    showClose?: boolean;
     width?: string;
     children?: Snippet;
     statusFields?: StatusField[];
@@ -26,6 +26,7 @@
     message,
     progress = 0,
     showProgress = true,
+    showClose = false,
     width = "400px",
     children,
     statusFields,
@@ -78,7 +79,7 @@
 </script>
 
 <div class="loading-wrapper">
-  <Window {title} {width} {statusFields}>
+  <Window {title} {width} {statusFields} {showClose}>
     <WindowBody>
       <div class="loading-content">
         {#if showProgress}
