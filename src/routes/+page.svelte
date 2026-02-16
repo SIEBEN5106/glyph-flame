@@ -1854,11 +1854,12 @@
     justify-content: center;
     min-width: 22px;
     min-height: 22px;
-    border: 1px solid #ffffff;
-    border-right-color: #000000;
-    border-bottom-color: #000000;
-    background-color: #c0c0c0;
     cursor: pointer;
+    box-shadow: none;
+  }
+
+  .toolbar-button:hover {
+    box-shadow: inset -1px -1px #0a0a0a,inset 1px 1px #fff,inset -2px -2px grey,inset 2px 2px #dfdfdf;
   }
 
   .toolbar-button:active,
@@ -1867,10 +1868,6 @@
     border-right-color: #ffffff;
     border-bottom-color: #ffffff;
     padding: 1px 0 0 1px;
-  }
-
-  .toolbar-button:hover:not(:disabled) {
-    background-color: #dfdfdf;
   }
 
   .toolbar-button:focus {

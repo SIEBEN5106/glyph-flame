@@ -11,6 +11,9 @@
  * 4. Check match ratio and black pixel ratio for accurate detection
  */
 
+import { createOffscreenCanvas, get2dContext } from './worker-utils.js';
+import { renderWithTofuPipeline, TOFU_SCALE, TOFU_PADDING, imageDataToPixels, type FontSize } from './glyph-renderer.js';
+
 /**
  * Result of tofu detection analysis
  */
@@ -71,6 +74,161 @@ export const DEFAULT_TOFU_OPTIONS: Required<TofuDetectionOptions> = {
   blackPixelThreshold: TOFU_BLACK_PIXEL_THRESHOLD,
   requireBothThresholds: TOFU_REQUIRE_BOTH,
 };
+
+/**
+ * Tofu signature for a specific font size
+ */
+export interface TofuSignature {
+  /** Font size */
+  fontSize: FontSize;
+  /** 2D boolean pattern of the tofu glyph */
+  pixels: boolean[][];
+  /** Pattern dimensions (should be fontSize * TOFU_SCALE) */
+  patternSize: number;
+  /** Total black pixel count in the signature */
+  blackPixelCount: number;
+}
+
+/**
+ * Tofu detection context - manages signature cache and detection options
+ */
+export class TofuDetector {
+  private signatureCache: Map<FontSize, TofuSignature> = new Map();
+  private options: Required<TofuDetectionOptions>;
+
+  constructor(options?: Partial<TofuDetectionOptions>) {
+    this.options = { ...DEFAULT_TOFU_OPTIONS, ...options };
+  }
+
+  /**
+   * Generate tofu signature for a specific font size
+   * Uses OffscreenCanvas for worker compatibility
+   */
+  async generateSignature(fontSize: FontSize): Promise<TofuSignature> {
+    const cached = this.signatureCache.get(fontSize);
+    if (cached) return cached;
+
+    const canvasSize = fontSize * TOFU_SCALE + TOFU_PADDING * 2;
+    const canvas = createOffscreenCanvas(canvasSize, canvasSize);
+    const ctx = get2dContext(canvas);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.font = `${fontSize * TOFU_SCALE}px "Adobe-NotDef"`;
+    ctx.textBaseline = 'top';
+    ctx.textAlign = 'left';
+    ctx.imageSmoothingEnabled = false;
+    ctx.textRendering = 'geometricPrecision';
+    ctx.fillStyle = '#000000';
+    ctx.fillText('\uFFFD', TOFU_PADDING, TOFU_PADDING);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = imageDataToPixels(imageData, 128);
+
+    const patternSize = fontSize * TOFU_SCALE;
+    const pattern: boolean[][] = [];
+    let blackPixels = 0;
+
+    for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
+      const row: boolean[] = [];
+      for (let x = TOFU_PADDING; x < TOFU_PADDING + patternSize; x++) {
+        const p = pixels[y]?.[x] ?? false;
+        if (p) blackPixels++;
+        row.push(p);
+      }
+      pattern.push(row);
+    }
+
+    const signature: TofuSignature = {
+      fontSize,
+      pixels: pattern,
+      patternSize,
+      blackPixelCount: blackPixels,
+    };
+
+    this.signatureCache.set(fontSize, signature);
+    return signature;
+  }
+
+  /**
+   * Render a character and check if it's tofu
+   * Returns the detection result along with rendered pixels for extraction
+   */
+  async detect(
+    char: string,
+    fontFamily: string,
+    fontSize: FontSize,
+  ): Promise<{
+    isTofu: boolean;
+    renderedPixels: boolean[][];
+    detectionResult: TofuDetectionResult;
+  }> {
+    const signature = await this.generateSignature(fontSize);
+
+    // Render character with tofu fallback
+    const pixels = await renderWithTofuPipeline(
+      char,
+      `${fontFamily}, "Adobe-NotDef"`,
+      fontSize,
+      { returnType: 'full' },
+    );
+
+    // Detect tofu using the signature
+    const result = this.detectInCanvas(pixels, signature);
+
+    return {
+      isTofu: result.isMatch,
+      renderedPixels: pixels,
+      detectionResult: result,
+    };
+  }
+
+  /**
+   * Detect tofu pattern in a rendered canvas using a pre-generated signature
+   */
+  detectInCanvas(
+    rendered: boolean[][],
+    signature: TofuSignature,
+  ): TofuDetectionResult {
+    return detectTofuPattern(rendered, signature.pixels, this.options);
+  }
+
+  /**
+   * Extract glyph pixels from rendered canvas at the standard position
+   * Used when character is NOT tofu (ready for firmware extraction)
+   */
+  extractGlyph(rendered: boolean[][]): boolean[][] {
+    const patternSize = rendered.length - TOFU_PADDING * 2;
+    const extracted: boolean[][] = [];
+
+    for (let y = 0; y < patternSize; y += TOFU_SCALE) {
+      const row: boolean[] = [];
+      for (let x = 0; x < patternSize; x += TOFU_SCALE) {
+        const canvasY = TOFU_PADDING + y;
+        const canvasX = TOFU_PADDING + x;
+        row.push(rendered[canvasY]?.[canvasX] ?? false);
+      }
+      extracted.push(row);
+    }
+
+    return extracted;
+  }
+
+  /**
+   * Clear cached signatures
+   */
+  clearCache(): void {
+    this.signatureCache.clear();
+  }
+
+  /**
+   * Get detection options (for debugging)
+   */
+  getOptions(): Required<TofuDetectionOptions> {
+    return { ...this.options };
+  }
+}
 
 /**
  * Count black pixels in a pixel grid

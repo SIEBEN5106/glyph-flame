@@ -22,25 +22,8 @@ import {
   detectTofuPattern,
   findBoundingBox,
   DEFAULT_TOFU_OPTIONS,
+  type TofuSignature,
 } from "./tofu-detection";
-
-/**
- * Tofu pixel signature for a font size
- * Stores canonical pixel representation of Adobe NotDef's .notdef glyph
- */
-export interface TofuSignature {
-  /** Font size for this signature */
-  fontSize: number;
-  /** Character used to generate signature */
-  char: string;
-  /** Pixel grid (2D boolean array) of Adobe NotDef render */
-  pixels: boolean[][];
-  /** Canvas dimensions used */
-  width: number;
-  height: number;
-  /** Size of the 4x4 pattern extracted from signature */
-  patternSize?: number;
-}
 
 /**
  * Registered tofu font state
@@ -52,8 +35,8 @@ interface TofuFontState {
   fontFamily: string;
   /** Whether font is loaded */
   loaded: boolean;
-  /** Cached signatures by font size */
-  signatures: Map<number, TofuSignature>;
+  /** Cached signatures by font size (using FontSize as key) */
+  signatures: Map<FontSize, TofuSignature>;
 }
 
 /**
@@ -206,7 +189,7 @@ export async function loadTofuFont(): Promise<void> {
  * @returns The Adobe NotDef signature
  */
 export async function generateTofuSignature(
-  fontSize: number,
+  fontSize: FontSize,
   testChar = DEFAULT_TOFU_TEST_CHAR,
 ): Promise<TofuSignature> {
   // Check if already cached
@@ -240,13 +223,15 @@ export async function generateTofuSignature(
     pattern.push(row);
   }
 
+  // Count black pixels for the signature
+  const blackPixelCount = pattern.reduce((count, row) =>
+    count + row.filter(p => p).length, 0);
+
   const signature: TofuSignature = {
     fontSize,
-    char: testChar,
     pixels: pattern,
-    width: patternSize,
-    height: patternSize,
     patternSize,
+    blackPixelCount,
   };
 
   // Cache signature
@@ -260,7 +245,7 @@ export async function generateTofuSignature(
  * @param fontSize - Font size in pixels
  * @returns The tofu signature or null if not generated
  */
-export function getTofuSignature(fontSize: number): TofuSignature | null {
+export function getTofuSignature(fontSize: FontSize): TofuSignature | null {
   return tofuState.signatures.get(fontSize) || null;
 }
 

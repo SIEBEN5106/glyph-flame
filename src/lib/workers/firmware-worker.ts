@@ -15,8 +15,8 @@ import { type PixelData } from "../rse/types";
 import { validateBitmapData, encodeV8 } from "../rse/utils/font-encoder";
 import { buildBitmapListFromMetadata } from "../rse/utils/metadata";
 import { convertToBmp, isValidFontData } from "../rse/utils/bitmap";
-import { renderWithTofuPipeline, TOFU_SCALE, TOFU_PADDING, imageDataToPixels } from "../rse/utils/glyph-renderer";
-import { detectTofuPattern, TOFU_MATCH_THRESHOLD, TOFU_BLACK_PIXEL_THRESHOLD } from "../rse/utils/tofu-detection";
+import { TOFU_PADDING } from "../rse/utils/glyph-renderer";
+import { TofuDetector } from "../rse/utils/tofu-detection";
 
 // Constants
 const SMALL_STRIDE = 32;
@@ -1344,6 +1344,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
 
       // =========================================================================
       // Analyze Fonts - Run tofu detection and return debug data
+      // Uses unified TofuDetector for consistent tofu detection
       // =========================================================================
 
       case "analyzeFonts": {
@@ -1378,139 +1379,27 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
           self.fonts.add(userFontFace);
           console.log("[analyzeFonts] User font loaded:", fontFamily);
 
-          // ALWAYS load tofu font for fallback rendering (needed when user font has missing glyphs)
-          // Fetch tofu font from server
-          // @ts-ignore - fonts API exists in workers
-          let tofuFontFace: FontFace | null = null;
-
+          // Load tofu font for fallback rendering
           const tofuResponse = await fetch("/AND-Regular.ttf");
           if (!tofuResponse.ok) {
             throw new Error(`Failed to fetch tofu font: ${tofuResponse.statusText}`);
           }
           const tofuBuffer = await tofuResponse.arrayBuffer();
-          tofuFontFace = new FontFace("Adobe-NotDef", tofuBuffer);
+          const tofuFontFace = new FontFace("Adobe-NotDef", tofuBuffer);
           await tofuFontFace.load();
           // @ts-ignore - fonts API exists in workers
           self.fonts.add(tofuFontFace);
 
-          // IMPORTANT: Wait for ALL fonts to be fully ready before rendering
-          // Without this, Firefox worker may not render fonts properly
+          // Wait for fonts to be ready
           // @ts-ignore - fonts API exists in workers
           await self.fonts.ready;
           console.log("[analyzeFonts] All fonts ready");
 
-          // Constants
-          const TOFU_SCALE = 4;
-          const TOFU_PADDING = 10;
-          const canvasSize = fontSize * TOFU_SCALE + TOFU_PADDING * 2;
+          // Create unified tofu detector
+          const tofuDetector = new TofuDetector();
+          const tofuSignature = await tofuDetector.generateSignature(fontSize as 12 | 16);
 
-          console.log("[analyzeFonts] Creating canvas:", { canvasSize, fontSize, TOFU_SCALE, TOFU_PADDING });
-
-          // Canvas for rendering
-          const canvas = new OffscreenCanvas(canvasSize, canvasSize);
-          const ctx = canvas.getContext("2d", { willReadFrequently: true });
-          if (!ctx) {
-            throw new Error("Failed to get canvas context");
-          }
-
-          console.log("[analyzeFonts] Canvas created");
-
-          // Helper: Get tofu signature for this font size
-          async function getTofuSignature(): Promise<boolean[][]> {
-            console.log("[analyzeFonts] Generating tofu signature for size:", fontSize);
-            ctx!.fillStyle = "#ffffff";
-            ctx!.fillRect(0, 0, canvas.width, canvas.height);
-            ctx!.font = `${fontSize * TOFU_SCALE}px "Adobe-NotDef"`;
-            ctx!.textBaseline = "top";
-            ctx!.textAlign = "left";
-            ctx!.imageSmoothingEnabled = false;
-            ctx!.textRendering = "geometricPrecision";
-            ctx!.fillStyle = "#000000"; // Ensure black text
-            ctx!.fillText("\uFFFD", TOFU_PADDING, TOFU_PADDING);
-
-            const imageData = ctx!.getImageData(0, 0, canvas.width, canvas.height);
-            const pixels = imageDataToPixels(imageData, 128);
-
-            const patternSize = fontSize * TOFU_SCALE;
-            const pattern: boolean[][] = [];
-            let blackPixels = 0;
-            for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
-              const row: boolean[] = [];
-              for (let x = TOFU_PADDING; x < TOFU_PADDING + patternSize; x++) {
-                const p = pixels[y]?.[x] ?? false;
-                if (p) blackPixels++;
-                row.push(p);
-              }
-              pattern.push(row);
-            }
-            console.log("[analyzeFonts] Tofu signature generated, black pixels:", blackPixels);
-            return pattern;
-          }
-
-          // Generate tofu signature internally
-          const tofuSigForWorker = await getTofuSignature();
-
-          // Helper: Analyze a single character and return TofuDebugData-compatible format
-          async function analyzeCharacter(char: string, codePoint: number): Promise<{
-            codePoint: number;
-            char: string;
-            fontSize: number;
-            renderedPixels: boolean[][];
-            tofuPixels: boolean[][];
-            match: boolean;
-            matchPercentage: number;
-            boundingBox1: { x: number; y: number; width: number; height: number };
-            boundingBox2: { x: number; y: number; width: number; height: number };
-          }> {
-            // Clear canvas
-            ctx!.fillStyle = "#ffffff";
-            ctx!.fillRect(0, 0, canvas.width, canvas.height);
-
-            // Render user font with tofu fallback
-            ctx!.font = `${fontSize * TOFU_SCALE}px ${fontFamily}, "Adobe-NotDef"`;
-            ctx!.textBaseline = "top";
-            ctx!.textAlign = "left";
-            ctx!.imageSmoothingEnabled = false;
-            ctx!.textRendering = "geometricPrecision";
-            ctx!.fillStyle = "#000000"; // Ensure black text
-            ctx!.fillText(char, TOFU_PADDING, TOFU_PADDING);
-
-            const imageData = ctx!.getImageData(0, 0, canvas.width, canvas.height);
-            const pixels = imageDataToPixels(imageData, 128);
-
-            // Use shared tofu detection algorithm
-            const result = detectTofuPattern(pixels, tofuSigForWorker);
-
-            // Extract rendered pixels (center crop like tofu pattern)
-            const patternSize = fontSize * TOFU_SCALE;
-            const renderedPattern: boolean[][] = [];
-            for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
-              const row: boolean[] = [];
-              for (let x = TOFU_PADDING; x < TOFU_PADDING + patternSize; x++) {
-                row.push(pixels[y]?.[x] ?? false);
-              }
-              renderedPattern.push(row);
-            }
-
-            // Bounding box for the best match position
-            const bbox1 = result.matchPosition
-              ? { x: result.matchPosition.x, y: result.matchPosition.y, width: patternSize, height: patternSize }
-              : { x: 0, y: 0, width: patternSize, height: patternSize };
-
-            return {
-              codePoint,
-              char,
-              fontSize,
-              renderedPixels: renderedPattern,
-              tofuPixels: tofuSigForWorker,
-              match: result.isMatch,
-              matchPercentage: result.matchRatio * 100,
-              boundingBox1: bbox1,
-              boundingBox2: { x: 0, y: 0, width: 0, height: 0 }, // Not needed in worker
-            };
-          }
-
-          // Analyze all characters
+          // Analyze all characters using unified detector
           type AnalysisResult = {
             codePoint: number;
             char: string;
@@ -1523,13 +1412,12 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             boundingBox2: { x: number; y: number; width: number; height: number };
           };
           const results: AnalysisResult[] = [];
-          console.log("[analyzeFonts] Starting loop, codePoints:", codePoints.length);
 
           for (let i = 0; i < codePoints.length; i++) {
             const codePoint = codePoints[i];
             const char = String.fromCodePoint(codePoint);
 
-            // Progress
+            // Progress update
             if (i % 50 === 0) {
               self.postMessage({
                 type: "progress",
@@ -1539,9 +1427,36 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
               });
             }
 
-            console.log("[analyzeFonts] Analyzing:", i, codePoint, char);
-            const result = await analyzeCharacter(char, codePoint);
-            results.push(result);
+            // Use unified detector
+            const detection = await tofuDetector.detect(char, fontFamily, fontSize as 12 | 16);
+
+            // Extract rendered pattern for debug output
+            const patternSize = tofuSignature.patternSize;
+            const renderedPattern: boolean[][] = [];
+            for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
+              const row: boolean[] = [];
+              for (let x = TOFU_PADDING; x < TOFU_PADDING + patternSize; x++) {
+                row.push(detection.renderedPixels[y]?.[x] ?? false);
+              }
+              renderedPattern.push(row);
+            }
+
+            // Bounding box for best match position
+            const bbox1 = detection.detectionResult.matchPosition
+              ? { x: detection.detectionResult.matchPosition.x, y: detection.detectionResult.matchPosition.y, width: patternSize, height: patternSize }
+              : { x: 0, y: 0, width: patternSize, height: patternSize };
+
+            results.push({
+              codePoint,
+              char,
+              fontSize,
+              renderedPixels: renderedPattern,
+              tofuPixels: tofuSignature.pixels,
+              match: detection.isTofu,
+              matchPercentage: detection.detectionResult.matchRatio * 100,
+              boundingBox1: bbox1,
+              boundingBox2: { x: 0, y: 0, width: 0, height: 0 },
+            });
 
             // Yield periodically
             if (i % 50 === 0) {
@@ -1549,21 +1464,16 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             }
           }
 
-          console.log("[analyzeFonts] Loop complete, results:", results.length);
+          console.log("[analyzeFonts] Analysis complete:", {
+            total: results.length,
+            tofuCount: results.filter((r) => r.match).length,
+          });
 
           // Clean up fonts
           // @ts-ignore - fonts API exists in workers
           self.fonts.delete(userFontFace);
-          // Only delete tofu font if it was loaded in worker
-          if (tofuFontFace) {
-            // @ts-ignore - fonts API exists in workers
-            self.fonts.delete(tofuFontFace);
-          }
-
-          console.log("[analyzeFonts] Analysis complete:", {
-            total: results.length,
-            tofuCount: results.filter((r: AnalysisResult) => r.match).length,
-          });
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.delete(tofuFontFace);
 
           // Convert to TofuDebugData format for main thread
           const debugData = results.map((r) => ({
@@ -1580,19 +1490,14 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             boundingBox2: r.boundingBox2,
           }));
 
-          console.log("[analyzeFonts] Sending success:", {
-            debugDataCount: debugData.length,
-            firstMatch: debugData.find(d => d.match),
-          });
-
           self.postMessage({
             type: "success",
             id,
             result: {
               success: true,
               debugData,
-              tofuSignature: tofuSigForWorker?.map((row) => row.map((p) => (p ? 1 : 0))) || [],
-              tofuPixelCount: tofuSigForWorker?.flat().filter(Boolean).length || 0,
+              tofuSignature: tofuSignature.pixels.map((row) => row.map((p) => (p ? 1 : 0))),
+              tofuPixelCount: tofuSignature.blackPixelCount,
             },
           });
         } catch (error) {
@@ -1606,11 +1511,9 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
         break;
       }
 
-      // Note: Tofu detection is now handled by tofu-detector.ts on main thread
-      // This avoids Firefox worker issues with FontFace rendering
-
       // =========================================================================
       // Complete Font Replacement in Worker
+      // Uses unified TofuDetector for consistent tofu detection
       // =========================================================================
 
       case "replaceFontsWorker": {
@@ -1650,37 +1553,24 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
           console.log("[replaceFontsWorker] User font loaded:", fontFamily);
 
           // Load tofu font for detection (fetch from server)
-          console.log("[replaceFontsWorker] Fetching tofu font from /AND-Regular.ttf...");
           const tofuResponse = await fetch("/AND-Regular.ttf");
           if (!tofuResponse.ok) {
             throw new Error(`Failed to fetch tofu font: ${tofuResponse.status} ${tofuResponse.statusText}`);
           }
           const tofuBuffer = await tofuResponse.arrayBuffer();
-          console.log("[replaceFontsWorker] Tofu font fetched, size:", tofuBuffer.byteLength);
           const tofuFontFace = new FontFace("Adobe-NotDef", tofuBuffer);
           await tofuFontFace.load();
-          console.log("[replaceFontsWorker] Tofu font loaded, family:", tofuFontFace.family);
           // @ts-ignore - fonts API exists in workers
           self.fonts.add(tofuFontFace);
 
-          // IMPORTANT: Wait for fonts to be fully ready before rendering
-          // Without this, Firefox worker may not render fonts properly
+          // Wait for fonts to be ready
           // @ts-ignore - fonts API exists in workers
           await self.fonts.ready;
           console.log("[replaceFontsWorker] Fonts ready");
 
-          // Constants
-          const TOFU_SCALE = 4;
-          const TOFU_PADDING = 10;
-          const canvasSize = fontSize * TOFU_SCALE + TOFU_PADDING * 2;
-
-          // Canvas for rendering
-          const canvas = new OffscreenCanvas(canvasSize, canvasSize);
-          const ctx = canvas.getContext("2d", { willReadFrequently: true });
-          if (!ctx) {
-            throw new Error("Failed to get canvas context");
-          }
-          console.log("[replaceFontsWorker] Canvas created:", canvasSize, "x", canvasSize);
+          // Create unified tofu detector
+          const tofuDetector = new TofuDetector();
+          await tofuDetector.generateSignature(fontSize as 12 | 16);
 
           // Set firmware data
           firmwareData = firmware;
@@ -1690,167 +1580,16 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             replacedCharacters: [] as number[],
             successCount: 0,
             skippedCharacters: [] as number[],
-            skippedReasons: new Map<number, string>(),
+            skippedReasons: {} as Record<number, string>,
             errors: [] as string[],
           };
 
-          // Helper: Get tofu signature for this font size
-          async function getTofuSignature(): Promise<boolean[][]> {
-            // Render tofu char
-            ctx!.fillStyle = "#ffffff";
-            ctx!.fillRect(0, 0, canvas.width, canvas.height);
-            console.log("[replaceFontsWorker] Rendering tofu char with font:", `${fontSize * TOFU_SCALE}px "Adobe-NotDef"`);
-            ctx!.font = `${fontSize * TOFU_SCALE}px "Adobe-NotDef"`;
-            ctx!.textBaseline = "top";
-            ctx!.textAlign = "left";
-            ctx!.imageSmoothingEnabled = false;
-            ctx!.textRendering = "geometricPrecision";
-            ctx!.fillStyle = "#000000"; // Ensure black text
-            ctx!.fillText("\uFFFD", TOFU_PADDING, TOFU_PADDING);
-
-            const imageData = ctx!.getImageData(0, 0, canvas.width, canvas.height);
-            const pixels = imageDataToPixels(imageData, 128);
-
-            // Count total black pixels in full canvas for debug
-            let fullBlackPixels = 0;
-            for (const row of pixels) {
-              for (const p of row) {
-                if (p) fullBlackPixels++;
-              }
-            }
-            console.log("[replaceFontsWorker] Full canvas black pixels:", fullBlackPixels);
-
-            // Extract center pattern
-            const patternSize = fontSize * TOFU_SCALE;
-            const pattern: boolean[][] = [];
-            for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
-              const row: boolean[] = [];
-              for (let x = TOFU_PADDING; x < TOFU_PADDING + patternSize; x++) {
-                row.push(pixels[y]?.[x] ?? false);
-              }
-              pattern.push(row);
-            }
-            return pattern;
-          }
-
-          // Get tofu signature once
-          const tofuSignature = await getTofuSignature();
-          console.log("[replaceFontsWorker] Tofu signature generated, pattern size:", tofuSignature.length, "x", tofuSignature[0]?.length);
-
-          // Count black pixels in tofu signature for debug
-          let tofuBlackPixels = 0;
-          for (const row of tofuSignature) {
-            for (const p of row) {
-              if (p) tofuBlackPixels++;
-            }
-          }
-          console.log("[replaceFontsWorker] Tofu signature black pixels:", tofuBlackPixels, "out of", tofuSignature.length * tofuSignature[0]?.length);
-
-          // Debug: Show first few rows of tofu signature pattern
-          console.log("[replaceFontsWorker] Tofu signature pattern (first 4 rows):");
-          for (let y = 0; y < Math.min(4, tofuSignature.length); y++) {
-            const rowStr = tofuSignature[y].map((p: boolean) => p ? "##" : "  ").join("");
-            console.log(`[replaceFontsWorker]   Row ${y}: ${rowStr}`);
-          }
-
-          // Helper: Render char and extract pixels
-          async function renderAndExtract(char: string, unicode: number): Promise<boolean[][] | null> {
-            // Use the shared tofu pipeline to render and get full canvas for tofu detection
-            const pixels = await renderWithTofuPipeline(
-              char,
-              `${fontFamily}, "Adobe-NotDef"`,
-              fontSize,
-              { returnType: "full" }
-            );
-
-            // Tofu detection - scan for signature using the full canvas
-            let bestMatchRatio = 0;
-            let bestMatchPos = { x: 0, y: 0 };
-            const patternSize = fontSize * TOFU_SCALE;
-
-            // Count black pixels in tofu signature for comparison
-            let tofuBlackCount = 0;
-            for (let py = 0; py < patternSize; py++) {
-              for (let px = 0; px < patternSize; px++) {
-                if (tofuSignature[py]?.[px]) tofuBlackCount++;
-              }
-            }
-
-            for (let startY = 0; startY <= canvasSize - patternSize; startY++) {
-              for (let startX = 0; startX <= canvasSize - patternSize; startX++) {
-                let matches = 0;
-                let total = 0;
-
-                for (let py = 0; py < patternSize; py++) {
-                  for (let px = 0; px < patternSize; px++) {
-                    const renderedY = startY + py;
-                    const renderedX = startX + px;
-                    if (pixels[renderedY]?.[renderedX] === tofuSignature[py]?.[px]) {
-                      matches++;
-                    }
-                    total++;
-                  }
-                }
-
-                const ratio = matches / total;
-                if (ratio > bestMatchRatio) {
-                  bestMatchRatio = ratio;
-                  bestMatchPos = { x: startX, y: startY };
-                }
-              }
-            }
-
-            // Count black pixels in rendered character
-            let charBlackPixels = 0;
-            for (let y = 0; y < canvasSize; y++) {
-              for (let x = 0; x < canvasSize; x++) {
-                if (pixels[y]?.[x]) charBlackPixels++;
-              }
-            }
-
-            // Debug first 20 characters
-            if (unicode < 0x14) {
-              console.log(`[replaceFontsWorker] U+${unicode.toString(16).toUpperCase().padStart(4, '0')} "${char}": tofuBlack=${tofuBlackCount}, charBlack=${charBlackPixels}, bestMatch=${(bestMatchRatio * 100).toFixed(1)}% @ (${bestMatchPos.x},${bestMatchPos.y})`);
-            }
-
-            // If tofu (92%+ match AND has similar black pixel count), skip
-            // This prevents blank/missing glyphs from being marked as tofu
-            const blackPixelRatio = tofuBlackCount > 0 ? charBlackPixels / tofuBlackCount : 0;
-            const isTofuMatch = bestMatchRatio >= TOFU_MATCH_THRESHOLD && blackPixelRatio > TOFU_BLACK_PIXEL_THRESHOLD;
-
-            if (isTofuMatch) {
-              // Debug output for tofu match
-              if (unicode < 0x20) {
-                console.log(`[replaceFontsWorker]   -> SKIPPING as tofu (match=${(bestMatchRatio * 100).toFixed(1)}%, blackRatio=${(blackPixelRatio * 100).toFixed(1)}%)`);
-              }
-              return null;
-            }
-
-            // Extract glyph pixels from the standard rendering position (TOFU_PADDING)
-            // This is where we render the character, so this is the correct extraction point
-            const extracted: boolean[][] = [];
-            for (let y = 0; y < patternSize; y += TOFU_SCALE) {
-              const row: boolean[] = [];
-              for (let x = 0; x < patternSize; x += TOFU_SCALE) {
-                // Extract from the standard rendering position (TOFU_PADDING)
-                const canvasY = TOFU_PADDING + y;
-                const canvasX = TOFU_PADDING + x;
-                row.push(pixels[canvasY]?.[canvasX] ?? false);
-              }
-              extracted.push(row);
-            }
-
-            return extracted;
-          }
-
-          // Process all characters
-          // NOTE: Use global detected addresses (SMALL_BASE, LARGE_BASE, LOOKUP_TABLE)
-          // instead of hardcoded values to support different firmware versions
+          // Process all characters using unified detector
           for (let i = 0; i < codePoints.length; i++) {
             const unicode = codePoints[i];
             const char = String.fromCodePoint(unicode);
 
-            // Progress update - send every 100 chars
+            // Progress update
             if (i % 100 === 0) {
               self.postMessage({
                 type: "progress",
@@ -1860,30 +1599,34 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
               });
             }
 
-            // Render and extract
-            const pixels = await renderAndExtract(char, unicode);
+            // Use unified detector for tofu detection and glyph extraction
+            const detection = await tofuDetector.detect(char, fontFamily, fontSize as 12 | 16);
 
-            if (!pixels) {
+            // If tofu detected, skip this character
+            if (detection.isTofu) {
               results.skippedCharacters.push(unicode);
-              results.skippedReasons.set(unicode, "tofu_detected");
+              results.skippedReasons[unicode] = "tofu_detected";
               continue;
             }
+
+            // Extract glyph pixels for firmware
+            const pixels = tofuDetector.extractGlyph(detection.renderedPixels);
 
             // Write to firmware using shared helper
             const addrInfo = getFontAddress(unicode, fontType, SMALL_BASE, LARGE_BASE);
             if (!addrInfo.valid) {
               results.skippedCharacters.push(unicode);
-              results.skippedReasons.set(unicode, "invalid_address");
+              results.skippedReasons[unicode] = "invalid_address";
               continue;
             }
 
             if (addrInfo.addr + addrInfo.stride > firmwareData!.length) {
               results.skippedCharacters.push(unicode);
-              results.skippedReasons.set(unicode, "address_out_of_bounds");
+              results.skippedReasons[unicode] = "address_out_of_bounds";
               continue;
             }
 
-            // Encode and write using shared helper for lookup value
+            // Encode and write
             const lookupVal = getLookupValue(unicode, firmwareData!, LOOKUP_TABLE);
             const encoded = encodeV8(pixels, lookupVal);
 
@@ -1918,7 +1661,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             }
           }
 
-          // Clean up
+          // Clean up fonts
           // @ts-ignore - fonts API exists in workers
           self.fonts.delete(userFontFace);
           // @ts-ignore - fonts API exists in workers
@@ -1927,24 +1670,12 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
           // Return final firmware
           const resultFirmware = firmwareData!.slice(0);
 
-          // Count skip reasons for logging
-          const skipReasonCounts = new Map<string, number>();
-          for (const reason of results.skippedReasons.values()) {
-            skipReasonCounts.set(reason, (skipReasonCounts.get(reason) ?? 0) + 1);
-          }
-
           console.log("[replaceFontsWorker] Sending success result:", {
             successCount: results.successCount,
             skippedCount: results.skippedCharacters.length,
-            skippedReasons: Object.fromEntries(skipReasonCounts),
+            skippedReasons: results.skippedReasons,
             firmwareLength: resultFirmware.length,
           });
-
-          // Convert Map to plain object for postMessage serialization
-          const skippedReasonsPlain: Record<number, string> = {};
-          for (const [key, value] of results.skippedReasons) {
-            skippedReasonsPlain[key] = value;
-          }
 
           self.postMessage({
             type: "success",
@@ -1952,7 +1683,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             result: {
               successCount: results.successCount,
               skippedCharacters: results.skippedCharacters,
-              skippedReasons: skippedReasonsPlain,
+              skippedReasons: results.skippedReasons,
               errors: results.errors,
               replacedCharacters: results.replacedCharacters,
               firmware: resultFirmware,
