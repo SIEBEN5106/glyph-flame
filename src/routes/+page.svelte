@@ -2005,16 +2005,8 @@
     box-shadow: none;
   }
 
-  .toolbar-button:hover {
+  .toolbar-button:hover:not(.toolbar-button:active) {
     box-shadow: inset -1px -1px #0a0a0a,inset 1px 1px #fff,inset -2px -2px grey,inset 2px 2px #dfdfdf;
-  }
-
-  .toolbar-button:active,
-  .toolbar-button:active:not(:disabled) {
-    border: 1px solid #000000;
-    border-right-color: #ffffff;
-    border-bottom-color: #ffffff;
-    padding: 1px 0 0 1px;
   }
 
   .toolbar-button:focus {
