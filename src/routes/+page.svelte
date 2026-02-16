@@ -1607,11 +1607,20 @@
     const target = e.target as HTMLInputElement;
     const files = target.files;
     if (files && files.length > 0) {
+      const fileArray = Array.from(files);
+
+      // Check for font files first (consistent with DnD behavior)
+      const fontFiles = fileArray.filter(isFontFile);
+      if (fontFiles.length > 0) {
+        await replaceFont(fontFiles[0]);
+        target.value = "";
+        return;
+      }
+
       // Check for single file smart replacement context
-      if (files.length === 1 && selectedNode?.type === "image" && imageData) {
-        await replaceCurrentlySelectedImage(files[0]);
+      if (fileArray.length === 1 && selectedNode?.type === "image" && imageData) {
+        await replaceCurrentlySelectedImage(fileArray[0]);
       } else {
-        const fileArray = Array.from(files);
         await handlePasteFiles(fileArray);
       }
     }
@@ -1727,7 +1736,7 @@
             <button
               type="button"
               class="toolbar-button"
-              title="Edit Images (Ctrl+V)"
+              title="Import Images or Fonts (Ctrl+V)"
               onclick={triggerEditFileInput}
               disabled={!firmwareData || isProcessing}
             >
@@ -1744,7 +1753,7 @@
             </button>
             <input
               type="file"
-              accept=".bmp,.png,.jpg,.jpeg"
+              accept=".bmp,.png,.jpg,.jpeg,.ttf,.otf,.woff,.woff2"
               multiple
               hidden
               class="hidden-input"
