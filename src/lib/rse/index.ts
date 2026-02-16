@@ -18,6 +18,7 @@ export * from './utils/tofu-font.js';
 export * from './utils/font-extraction.js';
 export * from './utils/font-detection.js';
 export * from './utils/font-loading.js';
+export * from './utils/font-glyph-checker.js';
 
 // Extractors
 export { FirmwareAnalyzer } from './extractors/firmware-analyzer.js';

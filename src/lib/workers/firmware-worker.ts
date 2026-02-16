@@ -1324,12 +1324,17 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             // Extract rendered pattern for debug output
             const patternSize = tofuSignature.patternSize;
             const renderedPattern: boolean[][] = [];
-            for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
-              const row: boolean[] = [];
-              for (let x = TOFU_PADDING; x < TOFU_PADDING + patternSize; x++) {
-                row.push(detection.renderedPixels[y]?.[x] ?? false);
+
+            if (detection.skippedRendering) {
+              // Glyph missing - tofu, renderPattern stays empty
+            } else {
+              for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
+                const row: boolean[] = [];
+                for (let x = TOFU_PADDING; x < TOFU_PADDING + patternSize; x++) {
+                  row.push(detection.renderedPixels[y]?.[x] ?? false);
+                }
+                renderedPattern.push(row);
               }
-              renderedPattern.push(row);
             }
 
             // Bounding box for best match position

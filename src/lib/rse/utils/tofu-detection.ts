@@ -13,6 +13,7 @@
 
 import { createOffscreenCanvas, get2dContext } from './worker-utils.js';
 import { renderWithTofuPipeline, TOFU_SCALE, TOFU_PADDING, imageDataToPixels, type FontSize } from './glyph-renderer.js';
+import { FontGlyphChecker, type GlyphCheckResult } from './font-glyph-checker.js';
 
 /**
  * Result of tofu detection analysis
@@ -152,8 +153,17 @@ export class TofuDetector {
   }
 
   /**
-   * Render a character and check if it's tofu
-   * Returns the detection result along with rendered pixels for extraction
+   * Smart detect: Check glyph first, only render if glyph exists
+   *
+   * Performance optimization:
+   * 1. Use Font Loading API to check if glyph exists
+   * 2. If glyph missing → skip rendering, return early (tofu)
+   * 3. If glyph exists → render and extract pixels for firmware
+   *
+   * @param char - Character to check
+   * @param fontFamily - Font family name
+   * @param fontSize - Font size in pixels
+   * @returns Detection result with rendered pixels (only if not tofu)
    */
   async detect(
     char: string,
@@ -163,7 +173,31 @@ export class TofuDetector {
     isTofu: boolean;
     renderedPixels: boolean[][];
     detectionResult: TofuDetectionResult;
+    skippedRendering: boolean; // True if we skipped rendering (glyph missing)
   }> {
+    // Step 1: Use Font Loading API to check glyph existence
+    // This is fast and doesn't require rendering
+    const glyphChecker = new FontGlyphChecker(fontFamily, fontSize);
+    const glyphResult = glyphChecker.check(char);
+
+    if (!glyphResult.hasGlyph) {
+      // Glyph missing → tofu, skip rendering entirely
+      return {
+        isTofu: true,
+        renderedPixels: [],
+        detectionResult: {
+          isMatch: true,
+          matchRatio: 1,
+          matchPosition: null,
+          tofuPixelCount: 0,
+          renderedPixelCount: 0,
+          blackPixelRatio: 0,
+        },
+        skippedRendering: true,
+      };
+    }
+
+    // Step 2: Glyph exists → render and extract pixels
     const signature = await this.generateSignature(fontSize);
 
     // Render character with tofu fallback
@@ -174,13 +208,14 @@ export class TofuDetector {
       { returnType: 'full' },
     );
 
-    // Detect tofu using the signature
+    // Detect tofu using the signature (for edge cases where Font API might differ)
     const result = this.detectInCanvas(pixels, signature);
 
     return {
       isTofu: result.isMatch,
       renderedPixels: pixels,
       detectionResult: result,
+      skippedRendering: false,
     };
   }
 
@@ -227,6 +262,83 @@ export class TofuDetector {
    */
   getOptions(): Required<TofuDetectionOptions> {
     return { ...this.options };
+  }
+
+  // =========================================================================
+  // Font Loading API-based detection (new, more robust method)
+  // =========================================================================
+
+  /**
+   * Create a FontGlyphChecker for this font
+   * @param fontFamily - Font family name
+   * @param fontSize - Font size in pixels
+   * @returns FontGlyphChecker instance
+   */
+  createGlyphChecker(fontFamily: string, fontSize: FontSize): FontGlyphChecker {
+    return new FontGlyphChecker(fontFamily, fontSize);
+  }
+
+  /**
+   * Check if a character is tofu using Font Loading API
+   *
+   * This is the new, more robust method that uses document.fonts.check()
+   * instead of canvas rendering and pixel pattern matching.
+   *
+   * @param char - Character to check
+   * @param fontFamily - Font family name
+   * @param fontSize - Font size in pixels
+   * @returns Detection result
+   */
+  detectWithFontApi(
+    char: string,
+    fontFamily: string,
+    fontSize: FontSize,
+  ): {
+    isTofu: boolean;
+    glyphResult: GlyphCheckResult;
+  } {
+    const checker = new FontGlyphChecker(fontFamily, fontSize);
+    const result = checker.check(char);
+
+    return {
+      isTofu: !result.hasGlyph,
+      glyphResult: result,
+    };
+  }
+
+  /**
+   * Detect tofu for multiple characters using Font Loading API
+   * More efficient than checking one by one
+   *
+   * @param chars - Characters to check
+   * @param fontFamily - Font family name
+   * @param fontSize - Font size in pixels
+   * @returns Map of characters to tofu status
+   */
+  detectMultipleWithFontApi(
+    chars: string[],
+    fontFamily: string,
+    fontSize: FontSize,
+  ): Map<string, boolean> {
+    const checker = new FontGlyphChecker(fontFamily, fontSize);
+    return checker.checkMultiple(chars, { verifyLoaded: false });
+  }
+
+  /**
+   * Find all tofu characters in a set using Font Loading API
+   *
+   * @param chars - Characters to check
+   * @param fontFamily - Font family name
+   * @param fontSize - Font size in pixels
+   * @returns Set of characters that are tofu (missing glyphs)
+   */
+  findTofuWithFontApi(
+    chars: string[],
+    fontFamily: string,
+    fontSize: FontSize,
+  ): Set<string> {
+    const checker = new FontGlyphChecker(fontFamily, fontSize);
+    return new Set(checker.getMissingGlyphs(chars, { verifyLoaded: false }));
   }
 }
 
