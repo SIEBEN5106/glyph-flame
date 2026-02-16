@@ -17,10 +17,14 @@
 	}: Props = $props();
 
 	let selectedSize = $state<'SMALL' | 'LARGE'>('SMALL');
+
+	function handleConfirm() {
+		onconfirm(selectedSize);
+	}
 </script>
 
 <div class="confirmation-wrapper">
-	<Window title="Confirm Font Size" width="500px" showClose={false}>
+	<Window title="Confirm Font Size" width="550px" showClose={false}>
 		<WindowBody>
 			<div class="confirmation-content">
 				<div class="message">
@@ -36,34 +40,59 @@
 							label="12px (SMALL) - Basic Latin, Latin-1, symbols"
 							name="fontSize"
 							value="SMALL"
-							bind:checked={selectedSize}
+							checked={selectedSize === 'SMALL'}
+							onchange={() => selectedSize = 'SMALL'}
 						/>
 						<Radio
 							label="16px (LARGE) - CJK characters (Chinese, Japanese, Korean)"
 							name="fontSize"
 							value="LARGE"
-							bind:checked={selectedSize}
+							checked={selectedSize === 'LARGE'}
+							onchange={() => selectedSize = 'LARGE'}
 						/>
 					</div>
 				</GroupBox>
 
 				{#if debugImages && debugImages.length > 0}
-					<div class="debug-preview">
-						<p class="debug-title">Rendered preview at tested sizes:</p>
-						<div class="debug-images">
-							{#each debugImages as img}
-								<div class="debug-image">
-									<img src={img.dataUrl} alt="Font preview at {img.fontSize}px" />
-									<span>{img.fontSize}px</span>
+					<div class="preview-section">
+						<div class="preview-scroll">
+							<div class="preview-row">
+								<div class="row-label">
+									<span class="size-label">12px</span>
 								</div>
-							{/each}
+								<div class="row-content">
+									{#each debugImages as img}
+										{#if img.fontSize === 12}
+											<div class="preview-image">
+												<img src={img.dataUrl} alt="Font preview at {img.fontSize}px" />
+												<span class="preview-info">{img.fontSize}px ({img.antiAliasedCount} aa)</span>
+											</div>
+										{/if}
+									{/each}
+								</div>
+							</div>
+							<div class="preview-row">
+								<div class="row-label">
+									<span class="size-label">16px</span>
+								</div>
+								<div class="row-content">
+									{#each debugImages as img}
+										{#if img.fontSize === 16}
+											<div class="preview-image">
+												<img src={img.dataUrl} alt="Font preview at {img.fontSize}px" />
+												<span class="preview-info">{img.fontSize}px ({img.antiAliasedCount} aa)</span>
+											</div>
+										{/if}
+									{/each}
+								</div>
+							</div>
 						</div>
 					</div>
 				{/if}
 
 				<div class="buttons">
 					<Button onclick={oncancel}>Cancel</Button>
-					<Button variant="primary" onclick={() => onconfirm(selectedSize)}>
+					<Button variant="primary" onclick={handleConfirm}>
 						Confirm {selectedSize === 'SMALL' ? '12px' : '16px'}
 					</Button>
 				</div>
@@ -123,39 +152,63 @@
 		cursor: pointer;
 	}
 
-	.debug-preview {
+	.preview-section {
 		margin-top: 16px;
+		border: 2px inset #c0c0c0;
+	}
+
+	.preview-scroll {
+		max-height: 300px;
+		overflow-y: auto;
+		overflow-x: auto;
 		padding: 8px;
-		background-color: #f0f0f0;
-		border: 1px inset #c0c0c0;
+		background-color: #ffffff;
 	}
 
-	.debug-title {
-		margin: 0 0 8px 0;
-		font-size: 11px;
-		color: #666;
+	.preview-row {
+		display: flex;
+		gap: 8px;
+		margin-bottom: 8px;
 	}
 
-	.debug-images {
+	.preview-row:last-child {
+		margin-bottom: 0;
+	}
+
+	.row-label {
+		flex-shrink: 0;
+		width: 60px;
+		display: flex;
+		align-items: flex-start;
+		padding-top: 2px;
+	}
+
+	.size-label {
+		font-size: 12px;
+		font-weight: bold;
+		color: #000080;
+	}
+
+	.row-content {
 		display: flex;
 		gap: 16px;
-		justify-content: center;
+		flex-wrap: nowrap;
 	}
 
-	.debug-image {
+	.preview-image {
 		display: flex;
 		flex-direction: column;
-		align-items: center;
+		align-items: flex-start;
 		gap: 4px;
 	}
 
-	.debug-image img {
-		border: 1px solid #999;
+	.preview-image img {
+		border: 1px solid #808080;
+		background-color: #e0e0e0;
 		image-rendering: pixelated;
-		max-width: 200px;
 	}
 
-	.debug-image span {
+	.preview-info {
 		font-size: 11px;
 		color: #666;
 	}
@@ -165,6 +218,8 @@
 		justify-content: flex-end;
 		gap: 8px;
 		margin-top: 16px;
+		padding-top: 8px;
+		border-top: 1px solid #c0c0c0;
 	}
 
 	:global(.buttons button) {

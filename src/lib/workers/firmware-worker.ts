@@ -90,6 +90,96 @@ function getLookupValue(unicode: number, firmwareData: Uint8Array, LOOKUP_TABLE:
   return firmwareData[LOOKUP_TABLE + (unicode >> 3)];
 }
 
+/**
+ * Result of font write operation
+ */
+interface FontWriteResult {
+  /** Whether the write was successful */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * Write encoded font data to firmware, preserving footer/bytes that must not change
+ * Handles both SMALL (32 bytes, preserve bytes 24-31) and LARGE (33 bytes, preserve footer) fonts
+ *
+ * @param firmwareData - Firmware data to write to
+ * @param encoded - Encoded font data (32 bytes for SMALL, 33 bytes for LARGE)
+ * @param addrInfo - Font address info containing address and stride
+ * @param unicode - Unicode code point (needed for verification lookup value)
+ * @returns FontWriteResult with success status and any error message
+ */
+function writeEncodedFont(
+  firmwareData: Uint8Array,
+  encoded: Uint8Array,
+  addrInfo: FontAddressInfo,
+  unicode: number,
+): FontWriteResult {
+  // Determine font type from stride (LARGE = 33, SMALL = 32)
+  const isLarge = addrInfo.stride === LARGE_STRIDE;
+
+  if (isLarge) {
+    // LARGE fonts: preserve footer byte
+    const footer = firmwareData[addrInfo.addr + addrInfo.stride - 1];
+    encoded[addrInfo.stride - 1] = footer;
+  } else {
+    // SMALL fonts: preserve original bottom 4 rows (bytes 24-31)
+    // This is critical - don't overwrite them with zeros!
+    const originalData = firmwareData.slice(
+      addrInfo.addr,
+      addrInfo.addr + addrInfo.stride,
+    );
+    // Copy bytes 24-31 (bottom 4 rows) from original to preserve them
+    encoded.set(originalData.slice(24), 24);
+  }
+
+  // Write encoded data to firmware
+  firmwareData.set(encoded, addrInfo.addr);
+
+  // Verify: read back and compare with original pixels
+  const firmwareChunk = firmwareData.slice(addrInfo.addr, addrInfo.addr + addrInfo.stride);
+
+  // Get lookup value using the unicode
+  const lookupVal = getLookupValue(unicode, firmwareData, LOOKUP_TABLE);
+
+  // Decode what we just wrote - returns 16x16 pixels
+  const decodedPixels = decodeV8(firmwareChunk, lookupVal);
+
+  // Decode original firmware data for comparison (before write)
+  const originalChunk = firmwareData.slice(addrInfo.addr, addrInfo.addr + addrInfo.stride);
+  const originalPixels = decodeV8(originalChunk, lookupVal);
+
+  // Compare decoded pixels with original pixels
+  // SMALL: compare top-left 12x12 area
+  // LARGE: compare full 16x16 area
+  const compareSize = isLarge ? 16 : 12;
+  for (let y = 0; y < compareSize; y++) {
+    for (let x = 0; x < compareSize; x++) {
+      if (decodedPixels[y][x] !== originalPixels[y][x]) {
+        return { success: false };
+      }
+    }
+  }
+
+  // Verify footer/bytes outside glyph box are preserved
+  if (isLarge) {
+    // LARGE: footer byte should be preserved
+    if (firmwareChunk[addrInfo.stride - 1] !== originalChunk[addrInfo.stride - 1]) {
+      return { success: false };
+    }
+  } else {
+    // SMALL: bottom 4 rows (bytes 24-31) should be preserved
+    for (let i = 24; i < addrInfo.stride; i++) {
+      if (firmwareChunk[i] !== originalChunk[i]) {
+        return { success: false };
+      }
+    }
+  }
+
+  return { success: true };
+}
+
 // Worker message types
 interface WorkerRequest {
   type:
@@ -102,7 +192,6 @@ interface WorkerRequest {
     | "replaceImages"
     | "getFirmware"
     | "bundleImagesAsZip"
-    | "replaceFonts"
     | "replaceFontsWorker" // Complete font replacement in worker
     | "analyzeFonts"; // Analyze font with tofu detection
   id: string;
@@ -124,22 +213,7 @@ interface WorkerRequest {
     offset: number;
     rgb565Data: Uint8Array;
   }>;
-  // Font replacement fields (for batch mode)
-  fontReplacements?: Array<{
-    /** Unicode code point */
-    unicode: number;
-    /** Pixel data (16x16 boolean array) */
-    pixels: boolean[][];
-  }>;
-  // Streaming font replacement fields
-  totalCharacters?: number; // Total expected characters (for progress reporting)
-  character?: {
-    /** Unicode code point */
-    unicode: number;
-    /** Pixel data (16x16 boolean array) */
-    pixels: boolean[][];
-  };
-  // Worker-based font extraction fields
+  // Worker-based font extraction/replacement fields
   fontData?: ArrayBuffer; // Font file data for worker to load
   fontFamily?: string; // Font family name to use
   fontSize?: 12 | 16; // Font size
@@ -1159,189 +1233,6 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
         break;
       }
 
-      case "replaceFonts": {
-        if (!firmwareData) {
-          self.postMessage({
-            type: "error",
-            id,
-            error: "Firmware not analyzed. Call analyze first.",
-          });
-          return;
-        }
-
-        const { fontType = "SMALL", fontReplacements } =
-          e.data as WorkerRequest & {
-            fontType: "SMALL" | "LARGE";
-            fontReplacements: Array<{
-              unicode: number;
-              pixels: boolean[][];
-            }>;
-          };
-
-        if (!fontReplacements || fontReplacements.length === 0) {
-          self.postMessage({
-            type: "error",
-            id,
-            error: "No font replacements provided",
-          });
-          return;
-        }
-
-        self.postMessage({
-          type: "progress",
-          id,
-          message: `Starting font replacement for ${fontReplacements.length} characters...`,
-        });
-
-        const replacedCharacters: number[] = [];
-        const skippedCharacters: number[] = [];
-        const skippedReasons = new Map<number, string>();
-        const errors: string[] = [];
-        let successCount = 0;
-
-        // Determine expected pixel size based on font type
-        const expectedSize = fontType === "SMALL" ? 12 : 16;
-
-        // Process each character replacement
-        for (let i = 0; i < fontReplacements.length; i++) {
-          const { unicode, pixels } = fontReplacements[i];
-
-          // Report progress periodically
-          if (i % 10 === 0 || i === fontReplacements.length - 1) {
-            self.postMessage({
-              type: "progress",
-              id,
-              message: `Processing U+${unicode.toString(16).toUpperCase().padStart(4, "0")} (${i + 1}/${fontReplacements.length})...`,
-            });
-          }
-
-          // Validate pixel data dimensions
-          if (pixels.length !== expectedSize) {
-            errors.push(
-              `U+${unicode.toString(16).toUpperCase().padStart(4, "0")}: Invalid pixel data height (got ${pixels.length}, expected ${expectedSize})`,
-            );
-            skippedCharacters.push(unicode);
-            skippedReasons.set(unicode, "invalid_pixel_data");
-            continue;
-          }
-
-          for (let row = 0; row < pixels.length; row++) {
-            if (pixels[row].length !== expectedSize) {
-              errors.push(
-                `U+${unicode.toString(16).toUpperCase().padStart(4, "0")}: Invalid pixel data width at row ${row} (got ${pixels[row].length}, expected ${expectedSize})`,
-              );
-              skippedCharacters.push(unicode);
-              skippedReasons.set(unicode, "invalid_pixel_data");
-              continue;
-            }
-          }
-
-          // Calculate firmware address using shared helper
-          const addrInfo = getFontAddress(unicode, fontType, SMALL_BASE, LARGE_BASE);
-          if (!addrInfo.valid) {
-            skippedCharacters.push(unicode);
-            skippedReasons.set(unicode, addrInfo.invalidReason || "invalid_address");
-            continue;
-          }
-
-          // Check if address is valid
-          if (addrInfo.addr + addrInfo.stride > firmwareData.length) {
-            skippedCharacters.push(unicode);
-            skippedReasons.set(unicode, "not_in_firmware");
-            continue;
-          }
-
-          // Get lookup value for encoding using shared helper
-          const lookupVal = getLookupValue(unicode, firmwareData, LOOKUP_TABLE);
-
-          // Prepare pixel data for encoding
-          // Note: For SMALL fonts, we don't pad - we preserve original bottom rows
-          // by copying bytes 24-31 from original firmware data after encoding
-          let pixelsToEncode: PixelData = pixels as PixelData;
-
-          try {
-            // Encode pixels to firmware format
-            const encodedChunk = encodeV8(pixelsToEncode, lookupVal);
-
-            // For LARGE fonts, add the footer byte
-            const chunkToWrite =
-              fontType === "LARGE"
-                ? new Uint8Array(LARGE_STRIDE)
-                : new Uint8Array(SMALL_STRIDE);
-
-            chunkToWrite.set(encodedChunk);
-
-            if (fontType === "LARGE") {
-              // Copy existing footer byte from original data
-              const originalData = firmwareData.slice(
-                addrInfo.addr,
-                addrInfo.addr + addrInfo.stride,
-              );
-              chunkToWrite[addrInfo.stride - 1] = originalData[addrInfo.stride - 1];
-            } else {
-              // SMALL fonts: preserve original bottom 4 rows (bytes 24-31)
-              // This is critical - don't overwrite them with zeros!
-              const originalData = firmwareData.slice(
-                addrInfo.addr,
-                addrInfo.addr + addrInfo.stride,
-              );
-              // Copy bytes 24-31 (bottom 4 rows) from original to preserve them
-              chunkToWrite.set(originalData.slice(24), 24);
-            }
-
-            // Write encoded data to firmware
-            firmwareData.set(chunkToWrite, addrInfo.addr);
-
-            // Verify by reading back
-            const writtenData = firmwareData.slice(addrInfo.addr, addrInfo.addr + addrInfo.stride);
-            let verified = true;
-
-            for (let j = 0; j < addrInfo.stride; j++) {
-              if (writtenData[j] !== chunkToWrite[j]) {
-                verified = false;
-                break;
-              }
-            }
-
-            if (!verified) {
-              self.postMessage({
-                type: "error",
-                id,
-                error: `Verification failed for U+${unicode.toString(16).toUpperCase().padStart(4, "0")}: written data does not match original`,
-              });
-              return;
-            }
-
-            // Success
-            replacedCharacters.push(unicode);
-            successCount++;
-          } catch (error) {
-            const errorMsg =
-              error instanceof Error ? error.message : String(error);
-            errors.push(
-              `U+${unicode.toString(16).toUpperCase().padStart(4, "0")}: ${errorMsg}`,
-            );
-            skippedCharacters.push(unicode);
-            skippedReasons.set(unicode, "encoding_error");
-          }
-        }
-
-        self.postMessage({
-          type: "success",
-          id,
-          result: {
-            successCount,
-            skippedCount: skippedCharacters.length,
-            errors,
-            replacedCharacters,
-            skippedCharacters,
-            skippedReasons,
-            fontType,
-          } as ReplaceFontsResult,
-        });
-        break;
-      }
-
       // =========================================================================
       // Analyze Fonts - Run tofu detection and return debug data
       // Uses unified TofuDetector for consistent tofu detection
@@ -1628,26 +1519,12 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
 
             // Encode and write
             const lookupVal = getLookupValue(unicode, firmwareData!, LOOKUP_TABLE);
-            const encoded = encodeV8(pixels, lookupVal);
+            const encoded = encodeV8(pixels, lookupVal, fontType);
 
-            if (fontType === "LARGE") {
-              const footer = firmwareData![addrInfo.addr + addrInfo.stride - 1];
-              encoded[addrInfo.stride - 1] = footer;
-            }
+            // Write to firmware using shared function
+            const writeResult = writeEncodedFont(firmwareData!, encoded, addrInfo, unicode);
 
-            firmwareData!.set(encoded, addrInfo.addr);
-
-            // Verify
-            const written = firmwareData!.slice(addrInfo.addr, addrInfo.addr + addrInfo.stride);
-            let verified = true;
-            for (let j = 0; j < addrInfo.stride; j++) {
-              if (written[j] !== encoded[j]) {
-                verified = false;
-                break;
-              }
-            }
-
-            if (!verified) {
+            if (!writeResult.success) {
               results.errors.push(`Verification failed for U+${unicode.toString(16).toUpperCase()}`);
               continue;
             }
