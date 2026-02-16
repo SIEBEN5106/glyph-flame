@@ -76,7 +76,7 @@ export async function detectFontType(fontFace: FontFace, includeDebugImages = fa
 
 	// If both are pixel-perfect, prefer SMALL (more common for pixel fonts)
 	if (result12px.isPixelPerfect && result16px.isPixelPerfect) {
-		fontType = 'SMALL';
+		fontType = 'LARGE';
 	}
 	// Classify as SMALL if only 12px rendering produces only black/white pixels
 	else if (result12px.isPixelPerfect) {
