@@ -29,22 +29,21 @@
 			<div class="confirmation-content">
 				<div class="message">
 					<p>
-						The font <strong>{fileName}</strong> could not be automatically identified as 12px
-						(SMALL) or 16px (LARGE). Please select the appropriate size manually.
+						The font <strong>{fileName}</strong> could not be automatically identified as 12px (SMALL) or 16px (LARGE). Please select the appropriate size manually.
 					</p>
 				</div>
 
 				<GroupBox label="Font Size">
 					<div class="radio-options">
 						<Radio
-							label="12px (SMALL) - Basic Latin, Latin-1, symbols"
+							label="12px (SMALL)"
 							name="fontSize"
 							value="SMALL"
 							checked={selectedSize === 'SMALL'}
 							onchange={() => selectedSize = 'SMALL'}
 						/>
 						<Radio
-							label="16px (LARGE) - CJK characters (Chinese, Japanese, Korean)"
+							label="16px (LARGE)"
 							name="fontSize"
 							value="LARGE"
 							checked={selectedSize === 'LARGE'}
