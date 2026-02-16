@@ -18,3 +18,4 @@ export { default as LoadingWindow } from './LoadingWindow.svelte';
 export { default as WarningWindow } from './WarningWindow.svelte';
 export { default as FontDebugWindow } from './FontDebugWindow.svelte';
 export { default as TofuDebugWindow } from './TofuDebugWindow.svelte';
+export { default as FontSizeConfirmationWindow } from './FontSizeConfirmationWindow.svelte';

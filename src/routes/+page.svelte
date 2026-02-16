@@ -18,11 +18,13 @@
     WarningWindow,
     FontDebugWindow,
     TofuDebugWindow,
+    FontSizeConfirmationWindow,
   } from "$lib/components/98css";
   import {
     unloadFontFile,
     FontLoadingError,
     loadAndValidateFontFile,
+    type FontLoadingResult,
   } from "$lib/rse/utils/font-loading";
   import { fileIO } from "$lib/rse/utils/file-io";
   import {
@@ -119,6 +121,15 @@
 
   // Tofu debug window state
   let showTofuDebug = $state(false);
+
+  // Font size confirmation dialog state
+  let showFontSizeConfirmation = $state(false);
+  let pendingFontConfirmation = $state<{
+    fontFamily: string;
+    fontData: ArrayBuffer;
+    fileName: string;
+    debugImages?: import("$lib/rse/utils/font-detection").FontDebugImage[];
+  } | null>(null);
   let tofuDebugData = $state<TofuDebugData[]>([]);
   let pendingReplacement = $state<{
     fontFamily: string;
@@ -127,14 +138,7 @@
     codePoints: number[];
   } | null>(null);
   // Store font result from preview so it can be unloaded after replacement
-  let previewFontResult = $state<{
-    fontFace: FontFace;
-    fontFamily: string;
-    detectedType: "SMALL" | "LARGE" | null;
-    fileName: string;
-    isPixelPerfect: boolean;
-    fontData: ArrayBuffer;
-  } | null>(null);
+  let previewFontResult: FontLoadingResult | null = $state(null);
 
   // Track replaced images - use array for better Svelte 5 reactivity
   let replacedImages = $state<string[]>([]);
@@ -899,39 +903,48 @@
     statusMessage = `Loading font file: ${file.name}...`;
     progress = 0; // Reset progress
 
-    let fontResult: {
-      fontFace: FontFace;
-      fontFamily: string;
-      detectedType: "SMALL" | "LARGE" | null;
-      fileName: string;
-      isPixelPerfect: boolean;
-      fontData: ArrayBuffer;
-    } | null = null;
+    let fontResult: FontLoadingResult | null = null;
 
     try {
       // Step 1: Load and validate the font file
       fontResult = await loadAndValidateFontFile(file);
-      const { fontFamily, detectedType } = fontResult;
+      const { fontFamily, detectedType, isUncertain, debugImages, fontData, fileName: resultFileName } = fontResult;
+
+      // Check if font type is uncertain - need user confirmation
+      if (isUncertain) {
+        pendingFontConfirmation = {
+          fontFamily,
+          fontData,
+          fileName: resultFileName,
+          debugImages,
+        };
+        showFontSizeConfirmation = true;
+        isProcessing = false;
+        return; // Wait for user to confirm font size
+      }
 
       if (!detectedType) {
         showWarningDialog(
           "Invalid Font File",
-          `The font file "${file.name}" could not be validated. ` +
+          `The font file "${resultFileName}" could not be validated. ` +
             `Please ensure it is a pixel art font designed for 12px or 16px size.`,
         );
         return;
       }
 
-      statusMessage = `Font loaded as ${detectedType}. Preparing replacement...`;
+      // Cast to confirmed type since we've checked isUncertain and detectedType is not null
+      const confirmedType = detectedType as "SMALL" | "LARGE";
+
+      statusMessage = `Font loaded as ${confirmedType}. Preparing replacement...`;
 
       // Step 2: Load tofu font for missing character detection
       await loadTofuFont();
 
       // Step 3: Determine Unicode ranges to process based on font type
-      const fontSize = detectedType === "SMALL" ? 12 : 16;
+      const fontSize = confirmedType === "SMALL" ? 12 : 16;
       let codePointsToProcess: number[] = [];
 
-      if (detectedType === "SMALL") {
+      if (confirmedType === "SMALL") {
         // SMALL fonts: process ranges 0x0000-0xffff
         for (const range of UNICODE_RANGES) {
           const start = Math.max(range.start, 0x0000);
@@ -965,7 +978,7 @@
           ...RARE_TEST_CHARS,
         ];
 
-        await runTofuDetectionPreview(fontFamily, fontSize, previewCodePoints, fontResult.fontData);
+        await runTofuDetectionPreview(fontFamily, fontSize, previewCodePoints, fontData);
 
         console.log("[handleFileLoad] After preview:", {
           tofuDebugDataLength: tofuDebugData.length,
@@ -976,7 +989,7 @@
           pendingReplacement = {
             fontFamily,
             fontSize,
-            fontType: detectedType,
+            fontType: confirmedType,
             codePoints: codePointsToProcess,
           };
           showTofuDebug = true;
@@ -989,9 +1002,9 @@
       await performFontReplacement(
         fontFamily,
         fontSize,
-        detectedType,
+        confirmedType,
         codePointsToProcess,
-        fontResult.fontData,
+        fontData,
       );
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -1230,6 +1243,130 @@
     if (previewFontResult) {
       unloadFontFile(previewFontResult.fontFace, previewFontResult.fontFamily);
       previewFontResult = null;
+    }
+  }
+
+  // Handle font size confirmation dialog
+  function handleFontSizeConfirm(fontType: "SMALL" | "LARGE"): void {
+    if (!pendingFontConfirmation) {
+      showFontSizeConfirmation = false;
+      return;
+    }
+
+    const { fontFamily, fontData, fileName } = pendingFontConfirmation;
+    pendingFontConfirmation = null;
+    showFontSizeConfirmation = false;
+
+    // Continue with the selected font type
+    continueFontReplacement(fontFamily, fontType, fontData, fileName);
+  }
+
+  function handleFontSizeCancel(): void {
+    pendingFontConfirmation = null;
+    showFontSizeConfirmation = false;
+    isProcessing = false;
+    loadingTitle = undefined;
+    statusMessage = "Font replacement cancelled";
+  }
+
+  // Continue font replacement after user confirmation
+  async function continueFontReplacement(
+    fontFamily: string,
+    fontType: "SMALL" | "LARGE",
+    fontData: ArrayBuffer,
+    fileName: string,
+  ): Promise<void> {
+    isProcessing = true;
+    loadingTitle = "Replacing Font Glyphs";
+    statusMessage = `Font loaded as ${fontType}. Preparing replacement...`;
+
+    try {
+      // Step 2: Load tofu font for missing character detection
+      await loadTofuFont();
+
+      // Step 3: Determine Unicode ranges to process based on font type
+      const fontSize = fontType === "SMALL" ? 12 : 16;
+      let codePointsToProcess: number[] = [];
+
+      if (fontType === "SMALL") {
+        // SMALL fonts: process ranges 0x0000-0xffff
+        for (const range of UNICODE_RANGES) {
+          const start = Math.max(range.start, 0x0000);
+          const end = Math.min(range.end, 0xffff);
+          if (start <= end) {
+            for (let cp = start; cp <= end; cp++) {
+              codePointsToProcess.push(cp);
+            }
+          }
+        }
+      } else {
+        // LARGE fonts: only process CJK range 0x4e00-0x9fff
+        for (let cp = 0x4e00; cp <= 0x9fff; cp++) {
+          codePointsToProcess.push(cp);
+        }
+      }
+
+      statusMessage = `Replacing ${codePointsToProcess.length} font characters...`;
+      progress = 10;
+
+      // Store font result so it can be used for preview
+      previewFontResult = {
+        fontFace: new FontFace("ConfirmedFont", fontData),
+        fontFamily,
+        detectedType: fontType,
+        isUncertain: false,
+        fileName,
+        isPixelPerfect: true,
+        fontData,
+      };
+
+      // Step 4: PREVIEW MODE - Run tofu detection first to show debug window
+      if (debug) {
+        statusMessage = "Running tofu detection preview...";
+
+        // Combine first 50 from range + all rare test chars for preview
+        const previewCodePoints = [
+          ...codePointsToProcess.slice(0, 50),
+          ...RARE_TEST_CHARS,
+        ];
+
+        await runTofuDetectionPreview(fontFamily, fontSize, previewCodePoints, fontData);
+
+        if (tofuDebugData.length > 0) {
+          pendingReplacement = {
+            fontFamily,
+            fontSize,
+            fontType,
+            codePoints: codePointsToProcess,
+          };
+          showTofuDebug = true;
+          isProcessing = false;
+          return;
+        }
+      }
+
+      // Step 5: Proceed with actual replacement
+      await performFontReplacement(
+        fontFamily,
+        fontSize,
+        fontType,
+        codePointsToProcess,
+        fontData,
+      );
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      showWarningDialog(
+        "Font Replacement Error",
+        `Failed to replace font:\n${errorMessage}`,
+      );
+      statusMessage = `Font replacement failed: ${errorMessage}`;
+    } finally {
+      if (previewFontResult) {
+        unloadFontFile(previewFontResult.fontFace, previewFontResult.fontFamily);
+        previewFontResult = null;
+      }
+      isProcessing = false;
+      loadingTitle = undefined;
     }
   }
 
@@ -1731,6 +1868,16 @@
       onclose={() =>
         pendingReplacement ? cancelFontReplacement() : (showTofuDebug = false)}
       onconfirm={() => confirmFontReplacement()}
+    />
+  {/if}
+
+  <!-- Font Size Confirmation Dialog -->
+  {#if showFontSizeConfirmation && pendingFontConfirmation}
+    <FontSizeConfirmationWindow
+      fileName={pendingFontConfirmation.fileName}
+      debugImages={pendingFontConfirmation.debugImages}
+      oncancel={handleFontSizeCancel}
+      onconfirm={handleFontSizeConfirm}
     />
   {/if}
 </div>

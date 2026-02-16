@@ -8,7 +8,7 @@
 /**
  * Font type detected
  */
-export type DetectedFontType = 'SMALL' | 'LARGE' | null;
+export type DetectedFontType = 'SMALL' | 'LARGE' | 'UNCERTAIN' | null;
 
 /**
  * Debug image data for font rendering tests
@@ -30,6 +30,8 @@ export interface FontDetectionResult {
 	fontType: DetectedFontType;
 	/** Whether the font is pixel-perfect (no anti-aliasing) */
 	isPixelPerfect: boolean;
+	/** Whether the font type is uncertain and requires user confirmation */
+	isUncertain: boolean;
 	/** Number of anti-aliased pixels found at 12px */
 	antiAliasedCount12px: number;
 	/** Number of anti-aliased pixels found at 16px */
@@ -73,10 +75,12 @@ export async function detectFontType(fontFace: FontFace, includeDebugImages = fa
 
 	// Determine font type based on pixel-perfect rendering
 	let fontType: DetectedFontType = null;
+	let isUncertain = false;
 
-	// If both are pixel-perfect, prefer SMALL (more common for pixel fonts)
+	// If both are pixel-perfect, we cannot determine automatically - ask user
 	if (result12px.isPixelPerfect && result16px.isPixelPerfect) {
-		fontType = 'LARGE';
+		fontType = 'UNCERTAIN';
+		isUncertain = true;
 	}
 	// Classify as SMALL if only 12px rendering produces only black/white pixels
 	else if (result12px.isPixelPerfect) {
@@ -92,7 +96,7 @@ export async function detectFontType(fontFace: FontFace, includeDebugImages = fa
 	const bothFailed = !result12px.isPixelPerfect && !result16px.isPixelPerfect;
 
 	const debugImages: FontDebugImage[] | undefined =
-		includeDebugImages && bothFailed
+		includeDebugImages && (bothFailed || isUncertain)
 			? [
 					{
 						dataUrl: result12px.debugImage ?? '',
@@ -110,6 +114,7 @@ export async function detectFontType(fontFace: FontFace, includeDebugImages = fa
 	return {
 		fontType,
 		isPixelPerfect: result12px.isPixelPerfect || result16px.isPixelPerfect,
+		isUncertain,
 		antiAliasedCount12px: result12px.antiAliasedCount,
 		antiAliasedCount16px: result16px.antiAliasedCount,
 		debugImages

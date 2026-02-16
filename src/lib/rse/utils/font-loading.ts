@@ -16,8 +16,12 @@ export interface FontLoadingResult {
   fontFace: FontFace;
   /** Font family name for use in rendering */
   fontFamily: string;
-  /** Detected font type ('SMALL' | 'LARGE' | null) */
+  /** Detected font type ('SMALL' | 'LARGE' | 'UNCERTAIN' | null) */
   detectedType: DetectedFontType;
+  /** Whether the font type is uncertain and requires user confirmation */
+  isUncertain: boolean;
+  /** Debug images showing rendered test results */
+  debugImages?: FontDebugImage[];
   /** Original file name */
   fileName: string;
   /** Whether the font is pixel-perfect (no anti-aliasing) */
@@ -222,7 +226,9 @@ export async function loadAndValidateFontFile(
   return {
     fontFace,
     fontFamily,
-    detectedType: detectionResult.fontType,
+    detectedType: detectionResult.fontType === 'UNCERTAIN' ? null : detectionResult.fontType,
+    isUncertain: detectionResult.isUncertain,
+    debugImages: detectionResult.debugImages,
     fileName: file.name,
     isPixelPerfect: detectionResult.isPixelPerfect,
     fontData: arrayBuffer,
@@ -353,7 +359,9 @@ export async function loadAndValidateFontFromArrayBuffer(
   return {
     fontFace,
     fontFamily: fontName,
-    detectedType: detectionResult.fontType,
+    detectedType: detectionResult.fontType === 'UNCERTAIN' ? null : detectionResult.fontType,
+    isUncertain: detectionResult.isUncertain,
+    debugImages: detectionResult.debugImages,
     fileName: fontName,
     isPixelPerfect: detectionResult.isPixelPerfect,
     fontData: arrayBuffer,
