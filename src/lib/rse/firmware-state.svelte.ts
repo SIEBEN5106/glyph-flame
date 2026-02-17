@@ -1,0 +1,930 @@
+import FirmwareWorker from "$lib/workers/firmware-worker.ts?worker";
+import {
+  unloadFontFile,
+  loadAndValidateFontFile,
+  FontLoadingError,
+  type FontLoadingResult,
+} from "$lib/rse/utils/font-loading";
+import { fileIO } from "$lib/rse/utils/file-io";
+import {
+  loadTofuFont,
+  setTofuDebugMode,
+  RARE_TEST_CHARS,
+  type TofuDebugData,
+} from "$lib/rse/utils/tofu-font";
+import { detectTofu } from "$lib/rse/utils/tofu-detector";
+import { imageToRgb565 } from "$lib/rse/utils/bitmap";
+import { UNICODE_RANGES } from "$lib/rse/utils/unicode-ranges";
+import { debugMode, debugAnimationComplete } from "$lib/stores";
+
+// Types
+export interface FontPlaneInfo {
+  name: string;
+  start: number;
+  end: number;
+  smallCount: number;
+  largeCount: number;
+  estimatedCount: number;
+  fontType: "SMALL" | "LARGE";
+}
+
+export interface BitmapFileInfo {
+  name: string;
+  width: number;
+  height: number;
+  size: number;
+  offset?: number;
+}
+
+export interface TreeNode {
+  id: string;
+  label: string;
+  type: "folder" | "font-type" | "plane" | "image";
+  data?: FontPlaneInfo | BitmapFileInfo;
+  children?: TreeNode[];
+}
+
+export interface SequenceReplacement {
+  imageName: string;
+  width: number;
+  height: number;
+  offset: number;
+  rgb565Data: Uint8Array;
+}
+
+export class FirmwareState {
+  firmwareData = $state<Uint8Array | null>(null);
+  originalFirmwareData = $state<Uint8Array | null>(null);
+  worker = $state<Worker | null>(null);
+  isProcessing = $state(false);
+  progress = $state(0);
+  statusMessage = $state("Ready to load firmware");
+  loadingTitle = $state<string | undefined>(undefined);
+  selectedNode = $state<TreeNode | null>(null);
+  expandedNodes = $state(new Set<string>());
+  treeNodes = $state<TreeNode[]>([]);
+
+  imageList = $state<BitmapFileInfo[]>([]);
+  planeData = $state<{
+    name: string;
+    start: number;
+    end: number;
+    fonts: Array<{
+      unicode: number;
+      fontType: "SMALL" | "LARGE";
+      pixels: boolean[][];
+    }>;
+  } | null>(null);
+  imageData = $state<{
+    name: string;
+    width: number;
+    height: number;
+    rgb565Data: Uint8Array;
+  } | null>(null);
+
+  // Warning dialog state
+  showWarning = $state(false);
+  warningTitle = $state("");
+  warningMessage = $state("");
+
+  // Font debug window state
+  showFontDebug = $state(false);
+  fontDebugFileName = $state("");
+  fontDebugMessage = $state("");
+  fontDebugImages = $state<import("$lib/rse/utils/font-detection").FontDebugImage[]>([]);
+
+  // Tofu debug window state
+  showTofuDebug = $state(false);
+
+  // Font size confirmation dialog state
+  showFontSizeConfirmation = $state(false);
+  pendingFontConfirmation = $state<{
+    fontFamily: string;
+    fontData: ArrayBuffer;
+    fileName: string;
+    debugImages?: import("$lib/rse/utils/font-detection").FontDebugImage[];
+  } | null>(null);
+  tofuDebugData = $state<TofuDebugData[]>([]);
+  pendingReplacement = $state<{
+    fontFamily: string;
+    fontSize: 12 | 16;
+    fontType: "SMALL" | "LARGE";
+    codePoints: number[];
+  } | null>(null);
+  previewFontResult: FontLoadingResult | null = $state(null);
+
+  replacedImages = $state<string[]>([]);
+  replacedSmallFontCharacters = $state<Set<number>>(new Set());
+  replacedLargeFontCharacters = $state<Set<number>>(new Set());
+
+  debug = $state(false);
+  debugAnimComplete = $state(true);
+
+  constructor() {
+    debugMode.subscribe((value) => {
+      this.debug = value;
+      setTofuDebugMode(value);
+    });
+    debugAnimationComplete.subscribe((value) => {
+      this.debugAnimComplete = value;
+    });
+  }
+
+  showLoadingWindow = $derived(
+    this.isProcessing || (this.debug && !this.debugAnimComplete),
+  );
+
+  init() {
+    this.worker = new FirmwareWorker();
+
+    this.worker.onmessage = (e: MessageEvent) => {
+      const { type, id, result, error, message } = e.data;
+
+      if (type === "success") {
+        if (id === "analyze") {
+          this.statusMessage = "Firmware analyzed. Loading resources...";
+          this.isProcessing = false;
+          this.loadResources();
+        } else if (id === "listPlanes") {
+          const planes = result as FontPlaneInfo[];
+          this.buildFontTree(planes);
+        } else if (id === "listImages") {
+          const images = result as BitmapFileInfo[];
+          this.imageList = images;
+          this.buildImageTree(images);
+        } else if (id === "extractPlane") {
+          const data = result as any;
+          this.planeData = data;
+          this.isProcessing = false;
+          this.statusMessage = `Loaded plane: ${data?.name ?? "Unknown"}`;
+        } else if (id === "extractImage") {
+          const data = result as any;
+          this.imageData = data;
+          this.isProcessing = false;
+          this.statusMessage = `Loaded image: ${data?.name ?? "Unknown"}`;
+        }
+      } else if (type === "progress") {
+        this.statusMessage = message;
+      } else if (type === "error") {
+        this.statusMessage = `Error: ${error}`;
+        this.isProcessing = false;
+      }
+    };
+
+    this.worker.onerror = (err) => {
+      this.statusMessage = `Worker error: ${err.message}`;
+      this.isProcessing = false;
+    };
+
+    return () => {
+      this.worker?.terminate();
+    };
+  }
+
+  async loadResources() {
+    if (!this.worker || !this.firmwareData) return;
+
+    this.worker.postMessage({
+      type: "listPlanes",
+      id: "listPlanes",
+      firmware: new Uint8Array(),
+    });
+
+    this.worker.postMessage({
+      type: "listImages",
+      id: "listImages",
+      firmware: new Uint8Array(),
+    });
+  }
+
+  buildFontTree(planes: FontPlaneInfo[]) {
+    const smallPlanes = planes
+      .filter((p) => p.smallCount > 0)
+      .map((plane) => ({
+        id: `plane-small-${plane.name}`,
+        label: `${plane.name} (${plane.smallCount})`,
+        type: "plane" as const,
+        data: { ...plane, fontType: "SMALL" as const },
+        children: [],
+      }));
+
+    const largePlanes = planes
+      .filter((p) => p.largeCount > 0)
+      .map((plane) => ({
+        id: `plane-large-${plane.name}`,
+        label: `${plane.name} (${plane.largeCount})`,
+        type: "plane" as const,
+        data: { ...plane, fontType: "LARGE" as const },
+        children: [],
+      }));
+
+    this.treeNodes = [
+      {
+        id: "fonts",
+        label: "Fonts",
+        type: "folder",
+        children: [
+          {
+            id: "fonts-small",
+            label: "SMALL Fonts",
+            type: "font-type",
+            children: smallPlanes,
+          },
+          {
+            id: "fonts-large",
+            label: "LARGE Fonts",
+            type: "font-type",
+            children: largePlanes,
+          },
+        ],
+      },
+      ...(this.treeNodes.length > 1 ? [this.treeNodes[1]] : []),
+    ];
+  }
+
+  buildImageTree(images: BitmapFileInfo[]) {
+    const imageNodes = images.map((img, idx) => {
+      return {
+        id: `image-${idx}`,
+        label: img.name,
+        type: "image" as const,
+        data: img,
+        children: [],
+      };
+    });
+
+    const imagesNode = {
+      id: "images",
+      label: "Firmware Images",
+      type: "folder" as const,
+      children: imageNodes,
+    };
+
+    if (this.treeNodes.length > 0 && this.treeNodes[0].id === "fonts") {
+      this.treeNodes = [this.treeNodes[0], imagesNode];
+    } else {
+      this.treeNodes = [...this.treeNodes, imagesNode];
+    }
+  }
+
+  handleNodeClick(node: TreeNode) {
+    if (this.isProcessing) return;
+
+    this.planeData = null;
+    this.imageData = null;
+    this.selectedNode = node;
+
+    if (node.type === "plane" && node.data) {
+      this.loadPlane(node.data as FontPlaneInfo);
+    } else if (node.type === "image" && node.data) {
+      const image = node.data as BitmapFileInfo;
+      if (image.offset === undefined) {
+        this.statusMessage = `Error: Image ${image.name} has no offset information`;
+        return;
+      }
+      this.loadImage(image);
+    }
+  }
+
+  handleSelectNode(nodeId: string) {
+    const node = this.findNodeById(this.treeNodes, nodeId);
+    if (node) {
+      this.handleNodeClick(node);
+    }
+  }
+
+  findNodeById(nodes: TreeNode[], id: string): TreeNode | null {
+    for (const node of nodes) {
+      if (node.id === id) return node;
+      if (node.children) {
+        const found = this.findNodeById(node.children, id);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  loadPlane(plane: FontPlaneInfo) {
+    if (!this.worker || !this.firmwareData || this.isProcessing) return;
+
+    this.isProcessing = true;
+    this.statusMessage = `Extracting ${plane.name} (${plane.fontType})...`;
+    this.imageData = null;
+
+    this.worker.postMessage({
+      type: "extractPlane",
+      id: "extractPlane",
+      firmware: new Uint8Array(),
+      fontType: plane.fontType,
+      planeName: plane.name,
+      start: plane.start,
+      end: plane.end,
+    });
+  }
+
+  loadImage(image: BitmapFileInfo) {
+    if (!this.worker || !this.firmwareData || this.isProcessing) return;
+
+    this.isProcessing = true;
+    this.statusMessage = `Extracting ${image.name}...`;
+    this.planeData = null;
+
+    this.worker.postMessage({
+      type: "extractImage",
+      id: "extractImage",
+      firmware: new Uint8Array(),
+      imageName: image.name,
+      width: image.width,
+      height: image.height,
+      offset: image.offset,
+    });
+  }
+
+  async loadFirmware(file: File) {
+    this.isProcessing = true;
+    this.progress = 10;
+    this.statusMessage = `Loading ${file.name}...`;
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      this.firmwareData = new Uint8Array(arrayBuffer);
+      this.originalFirmwareData = new Uint8Array(arrayBuffer);
+
+      this.replacedImages = [];
+      this.replacedSmallFontCharacters = new Set();
+      this.replacedLargeFontCharacters = new Set();
+
+      this.progress = 30;
+      this.statusMessage = "Analyzing firmware...";
+
+      this.worker!.postMessage({
+        type: "analyze",
+        id: "analyze",
+        firmware: this.firmwareData,
+      });
+
+      this.progress = 100;
+    } catch (err) {
+      this.statusMessage = `Error loading file: ${err}`;
+      this.isProcessing = false;
+    }
+  }
+
+  showWarningDialog(title: string, message: string) {
+    this.warningTitle = title;
+    this.warningMessage = message;
+    this.showWarning = true;
+  }
+
+  isFontFile(file: File): boolean {
+    const FONT_EXTENSIONS = [".ttf", ".otf", ".woff", ".woff2"];
+    const FONT_MIME_TYPES = [
+      "font/ttf", "font/otf", "font/woff", "font/woff2",
+      "application/font-ttf", "application/font-otf", "application/font-woff", "application/font-woff2",
+      "application/x-font-ttf", "application/x-font-otf", "application/x-font-woff",
+    ];
+    const fileName = file.name.toLowerCase();
+    return FONT_EXTENSIONS.some((ext) => fileName.endsWith(ext)) || FONT_MIME_TYPES.includes(file.type);
+  }
+
+  async handlePasteFiles(files: File[]) {
+    const fontFiles = files.filter(f => this.isFontFile(f));
+    const imageFiles = files.filter((f) => !this.isFontFile(f));
+
+    if (fontFiles.length > 0) {
+      await this.replaceFont(fontFiles[0]);
+      return;
+    }
+
+    if (!this.firmwareData || this.imageList.length === 0) {
+      this.showWarningDialog("Error", "No firmware loaded or no images available.");
+      return;
+    }
+
+    if (!this.worker) {
+      this.showWarningDialog("Error", "Worker not available.");
+      return;
+    }
+
+    this.isProcessing = true;
+    this.statusMessage = `Preparing to replace ${imageFiles.length} image(s)...`;
+
+    const replacements: Array<{
+      image: BitmapFileInfo;
+      rgb565Data: Uint8Array;
+    }> = [];
+    const notFound: string[] = [];
+    const decodeError: string[] = [];
+
+    const conversionPromises = imageFiles.map(async (file) => {
+      const pastedFileName = file.name.replace(/\.[^.]*$/, "").toUpperCase();
+      const matchingImage = this.imageList.find(
+        (img) => img.name.replace(/\.[^.]*$/, "").toUpperCase() === pastedFileName,
+      );
+
+      if (!matchingImage) {
+        notFound.push(file.name);
+        return null;
+      }
+
+      if (!matchingImage.offset) {
+        decodeError.push(`${file.name}: No offset information`);
+        return null;
+      }
+
+      try {
+        const rgb565Result = await imageToRgb565(file, matchingImage.width, matchingImage.height);
+        if (!rgb565Result) {
+          decodeError.push(`${file.name}: Dimension mismatch (expected ${matchingImage.width}x${matchingImage.height})`);
+          return null;
+        }
+        return { image: matchingImage, rgb565Data: rgb565Result.rgb565Data };
+      } catch (err) {
+        decodeError.push(`${file.name}: Failed to decode`);
+        return null;
+      }
+    });
+
+    const results = await Promise.all(conversionPromises);
+    for (const result of results) {
+      if (result) replacements.push(result);
+    }
+
+    if (replacements.length === 0) {
+      this.isProcessing = false;
+      let message = "No valid images to replace.\n\n";
+      if (notFound.length > 0) {
+        message += `Not found in firmware (${notFound.length}):\n${notFound.slice(0, 5).join(", ")}${notFound.length > 5 ? "..." : ""}\n\n`;
+      }
+      if (decodeError.length > 0) {
+        message += `Errors (${decodeError.length}):\n${decodeError.slice(0, 3).join("\n")}${decodeError.length > 3 ? "\n..." : ""}`;
+      }
+      this.showWarningDialog("Replacement Failed", message.trim());
+      return;
+    }
+
+    this.statusMessage = `Sending ${replacements.length} image(s) to worker...`;
+
+    await new Promise<void>((resolve) => {
+      const handler = (e: MessageEvent) => {
+        const { type, id, result } = e.data;
+        if (id === "replaceImages") {
+          if (type === "success") {
+            this.worker!.removeEventListener("message", handler);
+            const data = result as any;
+            for (const r of data.results) {
+              if (this.imageData && this.imageData.name === r.imageName) {
+                this.imageData = { ...this.imageData, rgb565Data: r.rgb565Data };
+              }
+              if (!this.replacedImages.includes(r.imageName)) {
+                this.replacedImages = [...this.replacedImages, r.imageName];
+              }
+            }
+
+            const totalErrors = notFound.length + decodeError.length + (data.notFound?.length || 0) + (data.dimensionMismatch?.length || 0) + (data.replaceError?.length || 0);
+
+            if (totalErrors > 0) {
+              let message = `Successfully replaced: ${data.successCount}\n\n`;
+              if (notFound.length > 0) message += `Not found: ${notFound.slice(0, 5).join(", ")}\n`;
+              this.showWarningDialog("Replacement Completed with Errors", message.trim());
+            } else {
+              this.statusMessage = `Successfully replaced ${data.successCount} image(s)`;
+            }
+            this.isProcessing = false;
+            resolve();
+          } else if (type === "error") {
+            this.worker!.removeEventListener("message", handler);
+            this.showWarningDialog("Replacement Error", `Failed to replace images: ${result}`);
+            this.isProcessing = false;
+            resolve();
+          }
+        }
+      };
+      this.worker!.addEventListener("message", handler);
+      this.worker!.postMessage({
+        type: "replaceImages",
+        id: "replaceImages",
+        firmware: new Uint8Array(),
+        images: replacements.map((r) => ({
+          imageName: r.image.name,
+          width: r.image.width,
+          height: r.image.height,
+          offset: r.image.offset!,
+          rgb565Data: r.rgb565Data,
+        })),
+      });
+    });
+  }
+
+  async exportFirmware() {
+    if (!this.firmwareData || !this.worker) {
+      this.showWarningDialog("Export Error", "No firmware data to export.");
+      return;
+    }
+
+    this.isProcessing = true;
+    this.statusMessage = "Retrieving modified firmware...";
+
+    try {
+      const modifiedFirmware = await new Promise<Uint8Array>((resolve, reject) => {
+        const handler = (e: MessageEvent) => {
+          const data = e.data;
+          if (data.id === "exportFirmware") {
+            this.worker!.removeEventListener("message", handler);
+            if (data.type === "success") resolve(data.result as Uint8Array);
+            else reject(new Error(data.error || "Failed to retrieve modified firmware"));
+          }
+        };
+        this.worker!.addEventListener("message", handler);
+        this.worker!.postMessage({ type: "getFirmware", id: "exportFirmware", firmware: new Uint8Array() });
+      });
+
+      this.firmwareData = modifiedFirmware;
+      const now = new Date();
+      const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, -5);
+      const filename = `firmware_modified_${timestamp}.bin`;
+      await fileIO.writeFile(filename, this.firmwareData);
+      this.statusMessage = `Firmware exported as ${filename}`;
+    } catch (err) {
+      this.showWarningDialog("Export Error", `Failed to export firmware: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  async bundleImagesAsZip() {
+    if (!this.firmwareData || !this.worker) {
+      this.showWarningDialog("Export Error", "No firmware data to export.");
+      return;
+    }
+
+    this.isProcessing = true;
+    this.statusMessage = "Preparing image bundle...";
+
+    try {
+      const zipData = await new Promise<Uint8Array>((resolve, reject) => {
+        const handler = (e: MessageEvent) => {
+          const data = e.data;
+          if (data.id === "bundleImagesAsZip") {
+            if (data.type === "success") {
+              this.worker!.removeEventListener("message", handler);
+              resolve(data.result as Uint8Array);
+            } else if (data.type === "error") {
+              this.worker!.removeEventListener("message", handler);
+              reject(new Error(data.error || "Failed to bundle images"));
+            }
+          }
+        };
+        this.worker!.addEventListener("message", handler);
+        this.worker!.postMessage({ type: "bundleImagesAsZip", id: "bundleImagesAsZip", firmware: new Uint8Array() });
+      });
+
+      const now = new Date();
+      const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, -5);
+      const filename = `firmware_images_${timestamp}.zip`;
+      await fileIO.writeFile(filename, zipData);
+      this.statusMessage = `Images exported as ${filename}`;
+    } catch (err) {
+      this.showWarningDialog("Export Error", `Failed to bundle images: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  async replaceFont(file: File): Promise<void> {
+    if (!this.worker || !this.firmwareData) {
+      this.showWarningDialog("Error", "No firmware loaded or worker not available.");
+      return;
+    }
+
+    if (this.isProcessing) {
+      this.showWarningDialog("Busy", "A replacement is already in progress. Please wait.");
+      return;
+    }
+
+    this.isProcessing = true;
+    this.loadingTitle = "Replacing Font Glyphs";
+    this.statusMessage = `Loading font file: ${file.name}...`;
+    this.progress = 0;
+
+    let fontResult: FontLoadingResult | null = null;
+
+    try {
+      fontResult = await loadAndValidateFontFile(file);
+      const { fontFamily, detectedType, isUncertain, debugImages, fontData, fileName: resultFileName } = fontResult;
+
+      if (isUncertain) {
+        this.pendingFontConfirmation = { fontFamily, fontData, fileName: resultFileName, debugImages };
+        this.showFontSizeConfirmation = true;
+        this.isProcessing = false;
+        return;
+      }
+
+      if (!detectedType) {
+        this.showWarningDialog("Invalid Font File", `The font file "${resultFileName}" could not be validated. Please ensure it is a pixel art font designed for 12px or 16px size.`);
+        return;
+      }
+
+      const confirmedType = detectedType as "SMALL" | "LARGE";
+      this.statusMessage = `Font loaded as ${confirmedType}. Preparing replacement...`;
+      await loadTofuFont();
+
+      const fontSize = confirmedType === "SMALL" ? 12 : 16;
+      let codePointsToProcess: number[] = [];
+
+      if (confirmedType === "SMALL") {
+        for (const range of UNICODE_RANGES) {
+          const start = Math.max(range.start, 0x0000);
+          const end = Math.min(range.end, 0xffff);
+          if (start <= end) {
+            for (let cp = start; cp <= end; cp++) codePointsToProcess.push(cp);
+          }
+        }
+      } else {
+        for (let cp = 0x4e00; cp <= 0x9fff; cp++) codePointsToProcess.push(cp);
+      }
+
+      this.statusMessage = `Replacing ${codePointsToProcess.length} font characters...`;
+      this.progress = 10;
+      this.previewFontResult = fontResult;
+
+      if (this.debug) {
+        this.statusMessage = "Running tofu detection preview...";
+        const previewCodePoints = [...codePointsToProcess.slice(0, 50), ...RARE_TEST_CHARS];
+        await this.runTofuDetectionPreview(fontFamily, fontSize, previewCodePoints, fontData);
+
+        if (this.tofuDebugData.length > 0) {
+          this.pendingReplacement = { fontFamily, fontSize, fontType: confirmedType, codePoints: codePointsToProcess };
+          this.showTofuDebug = true;
+          this.isProcessing = false;
+          return;
+        }
+      }
+
+      await this.performFontReplacement(fontFamily, fontSize, confirmedType, codePointsToProcess, fontData);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      if (err instanceof FontLoadingError && err.debugImages && err.debugImages.length > 0) {
+        this.fontDebugFileName = err.fileName;
+        this.fontDebugMessage = errorMessage;
+        this.fontDebugImages = err.debugImages;
+        this.showFontDebug = true;
+      } else {
+        this.showWarningDialog("Font Replacement Error", `Failed to replace font:\n${errorMessage}`);
+      }
+      this.statusMessage = `Font replacement failed: ${errorMessage}`;
+    } finally {
+      if (fontResult && !this.showTofuDebug) unloadFontFile(fontResult.fontFace, fontResult.fontFamily);
+      this.isProcessing = false;
+      this.loadingTitle = undefined;
+    }
+  }
+
+  async runTofuDetectionPreview(fontFamily: string, fontSize: 12 | 16, codePoints: number[], fontData: ArrayBuffer): Promise<void> {
+    const result = await detectTofu(this.worker!, { fontFamily, fontSize, codePoints, fontData });
+    if (!result.success) {
+      this.tofuDebugData = [];
+      throw new Error(`Tofu detection failed: ${result.error || 'Unknown error'}`);
+    }
+    this.tofuDebugData = result.debugData;
+  }
+
+  async performFontReplacement(fontFamily: string, fontSize: 12 | 16, fontType: "SMALL" | "LARGE", codePointsToProcess: number[], fontData: ArrayBuffer): Promise<void> {
+    setTofuDebugMode(this.debug);
+    let finishHandler: ((e: MessageEvent) => void) | null = null;
+    const resultPromise = new Promise<void>((resolve, reject) => {
+      finishHandler = (e: MessageEvent) => {
+        const { type, id, result, error, message } = e.data;
+        if (id === "replaceFontsWorker") {
+          if (type === "progress") {
+            this.statusMessage = message;
+            this.progress = e.data.progress;
+            return;
+          }
+          this.worker!.removeEventListener("message", finishHandler!);
+          finishHandler = null;
+          if (type === "success") {
+            const data = result as any;
+            const targetSet = fontType === "SMALL" ? this.replacedSmallFontCharacters : this.replacedLargeFontCharacters;
+            const mergedChars = new Set([...targetSet, ...data.replacedCharacters]);
+            if (fontType === "SMALL") this.replacedSmallFontCharacters = mergedChars;
+            else this.replacedLargeFontCharacters = mergedChars;
+            this.statusMessage = `Font replacement completed: ${data.successCount} replaced, ${data.skippedCount} skipped`;
+            this.progress = 100;
+            resolve();
+          } else {
+            reject(new Error(error || "Font replacement failed"));
+          }
+        }
+      };
+    });
+    this.worker!.addEventListener("message", finishHandler!);
+    const messageData = {
+      type: "replaceFontsWorker",
+      id: "replaceFontsWorker",
+      fontData,
+      fontFamily,
+      fontSize,
+      fontType,
+      firmware: this.firmwareData ? new Uint8Array(this.firmwareData) : null,
+      codePoints: codePointsToProcess,
+    };
+    try {
+      this.worker!.postMessage(messageData);
+    } catch (err) {
+      console.error("[performFontReplacement] postMessage error:", err);
+      throw err;
+    }
+    await resultPromise;
+  }
+
+  async confirmFontReplacement(): Promise<void> {
+    if (!this.pendingReplacement) {
+      this.showTofuDebug = false;
+      return;
+    }
+    const pr = structuredClone(this.pendingReplacement);
+    const { fontFamily, fontSize, fontType, codePoints } = pr;
+    this.pendingReplacement = null;
+    this.showTofuDebug = false;
+    this.isProcessing = true;
+    this.statusMessage = "Proceeding with font replacement...";
+    this.progress = 5;
+    const fontData = this.previewFontResult?.fontData;
+    if (!fontData) {
+      this.showWarningDialog("Error", "Font data not available");
+      return;
+    }
+    try {
+      await this.performFontReplacement(fontFamily, fontSize, fontType, codePoints, fontData);
+    } catch (err) {
+      this.showWarningDialog("Font Replacement Error", `Failed to replace font:\n${err instanceof Error ? err.message : String(err)}`);
+      this.statusMessage = `Font replacement failed: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      if (this.previewFontResult) {
+        unloadFontFile(this.previewFontResult.fontFace, this.previewFontResult.fontFamily);
+        this.previewFontResult = null;
+      }
+      this.isProcessing = false;
+      this.loadingTitle = undefined;
+    }
+  }
+
+  cancelFontReplacement(): void {
+    this.pendingReplacement = null;
+    this.showTofuDebug = false;
+    this.isProcessing = false;
+    this.loadingTitle = undefined;
+    this.statusMessage = "Font replacement cancelled";
+    if (this.previewFontResult) {
+      unloadFontFile(this.previewFontResult.fontFace, this.previewFontResult.fontFamily);
+      this.previewFontResult = null;
+    }
+  }
+
+  handleFontSizeConfirm(fontType: "SMALL" | "LARGE"): void {
+    if (!this.pendingFontConfirmation) {
+      this.showFontSizeConfirmation = false;
+      return;
+    }
+    const { fontFamily, fontData, fileName } = this.pendingFontConfirmation;
+    this.pendingFontConfirmation = null;
+    this.showFontSizeConfirmation = false;
+    this.continueFontReplacement(fontFamily, fontType, fontData, fileName);
+  }
+
+  handleFontSizeCancel(): void {
+    this.pendingFontConfirmation = null;
+    this.showFontSizeConfirmation = false;
+    this.isProcessing = false;
+    this.loadingTitle = undefined;
+    this.statusMessage = "Font replacement cancelled";
+  }
+
+  async continueFontReplacement(fontFamily: string, fontType: "SMALL" | "LARGE", fontData: ArrayBuffer, fileName: string): Promise<void> {
+    this.isProcessing = true;
+    this.loadingTitle = "Replacing Font Glyphs";
+    this.statusMessage = `Font loaded as ${fontType}. Preparing replacement...`;
+    try {
+      await loadTofuFont();
+      const fontSize = fontType === "SMALL" ? 12 : 16;
+      let codePointsToProcess: number[] = [];
+      if (fontType === "SMALL") {
+        for (const range of UNICODE_RANGES) {
+          const start = Math.max(range.start, 0x0000);
+          const end = Math.min(range.end, 0xffff);
+          if (start <= end) {
+            for (let cp = start; cp <= end; cp++) codePointsToProcess.push(cp);
+          }
+        }
+      } else {
+        for (let cp = 0x4e00; cp <= 0x9fff; cp++) codePointsToProcess.push(cp);
+      }
+      this.statusMessage = `Replacing ${codePointsToProcess.length} font characters...`;
+      this.progress = 10;
+      this.previewFontResult = { fontFace: new FontFace("ConfirmedFont", fontData), fontFamily, detectedType: fontType, isUncertain: false, fileName, isPixelPerfect: true, fontData };
+      if (this.debug) {
+        this.statusMessage = "Running tofu detection preview...";
+        const previewCodePoints = [...codePointsToProcess.slice(0, 50), ...RARE_TEST_CHARS];
+        await this.runTofuDetectionPreview(fontFamily, fontSize, previewCodePoints, fontData);
+        if (this.tofuDebugData.length > 0) {
+          this.pendingReplacement = { fontFamily, fontSize, fontType, codePoints: codePointsToProcess };
+          this.showTofuDebug = true;
+          this.isProcessing = false;
+          return;
+        }
+      }
+      await this.performFontReplacement(fontFamily, fontSize, fontType, codePointsToProcess, fontData);
+    } catch (err) {
+      this.showWarningDialog("Font Replacement Error", `Failed to replace font:\n${err instanceof Error ? err.message : String(err)}`);
+      this.statusMessage = `Font replacement failed: ${err instanceof Error ? err.message : String(err)}`;
+    } finally {
+      if (this.previewFontResult) {
+        unloadFontFile(this.previewFontResult.fontFace, this.previewFontResult.fontFamily);
+        this.previewFontResult = null;
+      }
+      this.isProcessing = false;
+      this.loadingTitle = undefined;
+    }
+  }
+
+  async handleSequenceReplace(mappings: { target: BitmapFileInfo; source: File }[]) {
+    this.isProcessing = true;
+    this.statusMessage = `Processing ${mappings.length} images...`;
+    const replacements: SequenceReplacement[] = [];
+    try {
+      for (const { target, source } of mappings) {
+        const rgb565Result = await imageToRgb565(source, target.width, target.height, { resize: true, grayscale: false });
+        if (!rgb565Result) throw new Error(`Failed to process ${source.name}`);
+        replacements.push({ imageName: target.name, width: target.width, height: target.height, offset: target.offset!, rgb565Data: rgb565Result.rgb565Data });
+      }
+      await new Promise<void>((resolve, reject) => {
+        const handler = (e: MessageEvent) => {
+          const { type, id, error } = e.data;
+          if (id === "replaceSequence") {
+            if (type === "progress") return;
+            this.worker!.removeEventListener("message", handler);
+            if (type === "success") {
+              for (const r of replacements) {
+                if (!this.replacedImages.includes(r.imageName)) this.replacedImages = [...this.replacedImages, r.imageName];
+              }
+              this.statusMessage = `Successfully replaced ${replacements.length} images`;
+              resolve();
+            } else reject(new Error(error || "Worker failed to replace sequence"));
+          }
+        };
+        this.worker!.addEventListener("message", handler);
+        this.worker!.postMessage({ type: "replaceImages", id: "replaceSequence", firmware: new Uint8Array(), images: replacements });
+      });
+    } catch (err) {
+      this.showWarningDialog("Sequence Replacement Failed", err instanceof Error ? err.message : String(err));
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  async replaceCurrentlySelectedImage(file: File) {
+    if (!this.selectedNode || this.selectedNode.type !== "image" || !this.imageData) return;
+    this.isProcessing = true;
+    this.statusMessage = `Processing ${file.name} for ${this.imageData.name}...`;
+    try {
+      const rgb565Result = await imageToRgb565(file, this.imageData.width, this.imageData.height, { resize: true, grayscale: false });
+      if (!rgb565Result) throw new Error("Failed to process image");
+      const replacement = { imageName: this.imageData.name, width: this.imageData.width, height: this.imageData.height, offset: (this.selectedNode.data as BitmapFileInfo).offset!, rgb565Data: rgb565Result.rgb565Data };
+      await new Promise<void>((resolve, reject) => {
+        const handler = (e: MessageEvent) => {
+          const { type, id, error } = e.data;
+          if (id === "replaceSingleImage") {
+            if (type === "progress") return;
+            this.worker!.removeEventListener("message", handler);
+            if (type === "success") {
+              if (this.imageData) this.imageData = { ...this.imageData, rgb565Data: replacement.rgb565Data };
+              if (!this.replacedImages.includes(replacement.imageName)) this.replacedImages = [...this.replacedImages, replacement.imageName];
+              this.statusMessage = `Successfully replaced ${replacement.imageName}`;
+              resolve();
+            } else reject(new Error(error || "Worker failed to replace image"));
+          }
+        };
+        this.worker!.addEventListener("message", handler);
+        this.worker!.postMessage({ type: "replaceImages", id: "replaceSingleImage", firmware: new Uint8Array(), images: [replacement] });
+      });
+    } catch (err) {
+      this.showWarningDialog("Replacement Failed", `Failed to process ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  handleCloseResourceViewer() {
+    this.firmwareData = null;
+    this.treeNodes = [];
+    this.imageList = [];
+    this.selectedNode = null;
+    this.planeData = null;
+    this.imageData = null;
+    this.statusMessage = "Ready to load firmware";
+    this.replacedImages = [];
+    this.replacedSmallFontCharacters = new Set();
+    this.replacedLargeFontCharacters = new Set();
+  }
+}

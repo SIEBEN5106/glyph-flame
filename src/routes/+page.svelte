@@ -1,14 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import ImageRenderer from "$lib/components/firmware/ImageRenderer.svelte";
-  import FirmwareWorker from "$lib/workers/firmware-worker.ts?worker";
   import FontGridRenderer from "$lib/components/firmware/FontGridRenderer.svelte";
   import SequenceReplacerWindow from "$lib/components/firmware/SequenceReplacerWindow.svelte";
-  import {
-    debugMode,
-    initDebugShortcut,
-    debugAnimationComplete,
-  } from "$lib/stores";
+  import { initDebugShortcut } from "$lib/stores";
   import {
     Window,
     TreeView,
@@ -20,1465 +15,144 @@
     TofuDebugWindow,
     FontSizeConfirmationWindow,
   } from "$lib/components/98css";
-  import {
-    unloadFontFile,
-    FontLoadingError,
-    loadAndValidateFontFile,
-    type FontLoadingResult,
-  } from "$lib/rse/utils/font-loading";
-  import { fileIO } from "$lib/rse/utils/file-io";
-  import {
-    loadTofuFont,
-    isTofuFontLoaded,
-    setTofuDebugMode,
-    getTofuDebugData,
-    RARE_TEST_CHARS,
-    type TofuDebugData,
-  } from "$lib/rse/utils/tofu-font";
-  import { detectTofu } from "$lib/rse/utils/tofu-detector";
-  import { imageToRgb565 } from "$lib/rse/utils/bitmap";
-  import { UNICODE_RANGES } from "$lib/rse/utils/unicode-ranges";
-  import { extractCharacter } from "$lib/rse/utils/font-extraction";
-
-  // Types
-  interface FontPlaneInfo {
-    name: string;
-    start: number;
-    end: number;
-    smallCount: number;
-    largeCount: number;
-    estimatedCount: number;
-    fontType: "SMALL" | "LARGE";
-  }
-
-  interface BitmapFileInfo {
-    name: string;
-    width: number;
-    height: number;
-    size: number;
-    offset?: number;
-  }
-
-  interface TreeNode {
-    id: string;
-    label: string;
-    type: "folder" | "font-type" | "plane" | "image";
-    data?: FontPlaneInfo | BitmapFileInfo;
-    children?: TreeNode[];
-  }
-
-  interface SequenceReplacement {
-    imageName: string;
-    width: number;
-    height: number;
-    offset: number;
-    rgb565Data: Uint8Array;
-  }
+  import { FirmwareState } from "$lib/rse/firmware-state.svelte";
 
   // State
-  let firmwareData = $state<Uint8Array | null>(null);
-  let originalFirmwareData = $state<Uint8Array | null>(null); // For rollback
-  // svelte-ignore non_reactive_update
-  let worker: Worker | null = null;
-  let isProcessing = $state(false);
-  let progress = $state(0);
-  let statusMessage = $state("Ready to load firmware");
-  let loadingTitle = $state<string | undefined>(undefined);
-  let selectedNode = $state<TreeNode | null>(null);
-  let expandedNodes = $state(new Set<string>());
-  let treeNodes = $state<TreeNode[]>([]);
+  const fwState = new FirmwareState();
 
-  let imageList = $state<BitmapFileInfo[]>([]);
-  let planeData = $state<{
-    name: string;
-    start: number;
-    end: number;
-    fonts: Array<{
-      unicode: number;
-      fontType: "SMALL" | "LARGE";
-      pixels: boolean[][];
-    }>;
-  } | null>(null);
-  let imageData = $state<{
-    name: string;
-    width: number;
-    height: number;
-    rgb565Data: Uint8Array;
-  } | null>(null);
-
-  // Warning dialog state
-  let showWarning = $state(false);
-  let warningTitle = $state("");
-  let warningMessage = $state("");
-
-  // Font debug window state
-  let showFontDebug = $state(false);
-  let fontDebugFileName = $state("");
-  let fontDebugMessage = $state("");
-  let fontDebugImages = $state<
-    import("$lib/rse/utils/font-detection").FontDebugImage[]
-  >([]);
-
-  // Tofu debug window state
-  let showTofuDebug = $state(false);
-
-  // Font size confirmation dialog state
-  let showFontSizeConfirmation = $state(false);
-  let pendingFontConfirmation = $state<{
-    fontFamily: string;
-    fontData: ArrayBuffer;
-    fileName: string;
-    debugImages?: import("$lib/rse/utils/font-detection").FontDebugImage[];
-  } | null>(null);
-  let tofuDebugData = $state<TofuDebugData[]>([]);
-  let pendingReplacement = $state<{
-    fontFamily: string;
-    fontSize: 12 | 16;
-    fontType: "SMALL" | "LARGE";
-    codePoints: number[];
-  } | null>(null);
-  // Store font result from preview so it can be unloaded after replacement
-  let previewFontResult: FontLoadingResult | null = $state(null);
-
-  // Track replaced images - use array for better Svelte 5 reactivity
-  let replacedImages = $state<string[]>([]);
-
-  // Track replaced font characters separately for SMALL and LARGE fonts
-  let replacedSmallFontCharacters = $state<Set<number>>(new Set());
-  let replacedLargeFontCharacters = $state<Set<number>>(new Set());
-
-  // Show sequence replacer mode
+  // Show sequence replacer mode (UI only state)
   let showSequenceReplacer = $state(false);
 
-  // File input
-  // svelte-ignore non_reactive_update
-  let fileInput: HTMLInputElement;
-  // svelte-ignore non_reactive_update
-  let dropZone: HTMLDivElement;
+  // File input refs
+  let fileInput = $state<HTMLInputElement | null>(null);
+  let editFileInput = $state<HTMLInputElement | null>(null);
+  let dropZone = $state<HTMLDivElement | null>(null);
   let isDragOver = $state(false);
   let isImageDragOver = $state(false);
 
-  // Edit/Replacement file input (for multiple files)
-  // svelte-ignore non_reactive_update
-  let editFileInput: HTMLInputElement;
+  // Initialize
+  onMount(() => {
+    initDebugShortcut();
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("paste", handlePaste);
 
-  // Debug mode tracking - use state with subscribe for proper reactivity
-  let debug = $state(false);
-  let debugAnimComplete = $state(true);
+    const cleanup = fwState.init();
 
-  // Subscribe to stores
-  debugMode.subscribe((value) => {
-    debug = value;
-    // Also enable tofu debug mode when debug mode is on
-    setTofuDebugMode(value);
+    return () => {
+      cleanup();
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("paste", handlePaste);
+    };
   });
-  debugAnimationComplete.subscribe((value) => {
-    debugAnimComplete = value;
-  });
-
-  let showLoadingWindow = $derived(
-    isProcessing || (debug && !debugAnimComplete),
-  );
 
   // Update document title dynamically
   $effect(() => {
-    if (!firmwareData && !isProcessing) {
+    if (!fwState.firmwareData && !fwState.isProcessing) {
       document.title = "FlameOcean";
-    } else if (showLoadingWindow) {
+    } else if (fwState.showLoadingWindow) {
       document.title = "Loading - FlameOcean";
-    } else if (selectedNode?.type === "image" && imageData) {
-      document.title = `${imageData.name} - FlameOcean`;
-    } else if (selectedNode?.type === "plane" && planeData) {
-      const fontType = (selectedNode.data as FontPlaneInfo)?.fontType;
-      document.title = `${planeData.name} (${fontType}) - FlameOcean`;
+    } else if (fwState.selectedNode?.type === "image" && fwState.imageData) {
+      document.title = `${fwState.imageData.name} - FlameOcean`;
+    } else if (fwState.selectedNode?.type === "plane" && fwState.planeData) {
+      const fontType = (fwState.selectedNode.data as any)?.fontType;
+      document.title = `${fwState.planeData.name} (${fontType}) - FlameOcean`;
     } else {
       document.title = "Resource Browser - FlameOcean";
     }
   });
 
-  // Initialize worker
-  onMount(() => {
-    // Initialize global debug shortcut (Ctrl+Shift+D)
-    initDebugShortcut();
-
-    // Add keyboard listener for Ctrl+S export
-    window.addEventListener("keydown", handleKeyDown);
-
-    // Add paste listener for image and font replacement
-    window.addEventListener("paste", async (e: ClipboardEvent) => {
-      if (isProcessing) {
-        showWarningDialog(
-          "Busy",
-          "A replacement is already in progress. Please wait.",
-        );
-        return;
-      }
-
-      const items = e.clipboardData?.items;
-      if (!items) return;
-
-      const files: File[] = [];
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item && item.type.startsWith("image/")) {
-          const file = item.getAsFile();
-          if (file) {
-            files.push(file);
-          }
-        } else if (item) {
-          // Check for font files by MIME type
-          const file = item.getAsFile();
-          if (file && isFontFile(file)) {
-            files.push(file);
-          }
-        }
-      }
-
-      if (files.length === 0) return;
-
-      // Check for font files first
-      const fontFiles = files.filter(isFontFile);
-      if (fontFiles.length > 0) {
-        // Process the first font file
-        await replaceFont(fontFiles[0]);
-        return;
-      }
-
-      // Smart Replacement Logic for Paste:
-      const imageFiles = files.filter((f) => !isFontFile(f));
-      if (imageFiles.length === 0) return;
-
-      if (
-        imageFiles.length === 1 &&
-        selectedNode?.type === "image" &&
-        imageData
-      ) {
-        await replaceCurrentlySelectedImage(imageFiles[0]);
-      } else {
-        await handlePasteFiles(imageFiles);
-      }
-    });
-
-    worker = new FirmwareWorker();
-
-    worker.onmessage = (e: MessageEvent) => {
-      const { type, id, result, error, message } = e.data;
-
-      if (type === "success") {
-        if (id === "analyze") {
-          // After analysis, list planes and images
-          statusMessage = "Firmware analyzed. Loading resources...";
-          isProcessing = false;
-          loadResources();
-        } else if (id === "listPlanes") {
-          const planes = result as FontPlaneInfo[];
-          buildFontTree(planes);
-        } else if (id === "listImages") {
-          const images = result as BitmapFileInfo[];
-          imageList = images;
-          buildImageTree(images);
-        } else if (id === "extractPlane") {
-          const data = result as typeof planeData;
-          planeData = data;
-          isProcessing = false;
-          statusMessage = `Loaded plane: ${data?.name ?? "Unknown"}`;
-        } else if (id === "extractImage") {
-          const data = result as typeof imageData;
-          imageData = data;
-          isProcessing = false;
-          statusMessage = `Loaded image: ${data?.name ?? "Unknown"}`;
-        }
-      } else if (type === "progress") {
-        statusMessage = message;
-      } else if (type === "error") {
-        statusMessage = `Error: ${error}`;
-        isProcessing = false;
-      }
-    };
-
-    worker.onerror = (err) => {
-      statusMessage = `Worker error: ${err.message}`;
-      isProcessing = false;
-    };
-
-    return () => {
-      worker?.terminate();
-      window.removeEventListener("keydown", handleKeyDown);
-      // Note: paste listener is removed with page unmount
-    };
-  });
-
-  // Load resources after analysis
-  async function loadResources() {
-    if (!worker || !firmwareData) return;
-
-    // List fonts
-    worker.postMessage({
-      type: "listPlanes",
-      id: "listPlanes",
-      firmware: new Uint8Array(), // Empty, worker uses cached data
-    });
-
-    // List images
-    worker.postMessage({
-      type: "listImages",
-      id: "listImages",
-      firmware: new Uint8Array(),
-    });
-  }
-
-  // Build font tree structure
-  function buildFontTree(planes: FontPlaneInfo[]) {
-    // Create SMALL font planes
-    const smallPlanes = planes
-      .filter((p) => p.smallCount > 0)
-      .map((plane) => ({
-        id: `plane-small-${plane.name}`,
-        label: `${plane.name} (${plane.smallCount})`,
-        type: "plane" as const,
-        data: { ...plane, fontType: "SMALL" as const },
-        children: [],
-      }));
-
-    // Create LARGE font planes
-    const largePlanes = planes
-      .filter((p) => p.largeCount > 0)
-      .map((plane) => ({
-        id: `plane-large-${plane.name}`,
-        label: `${plane.name} (${plane.largeCount})`,
-        type: "plane" as const,
-        data: { ...plane, fontType: "LARGE" as const },
-        children: [],
-      }));
-
-    treeNodes = [
-      {
-        id: "fonts",
-        label: "Fonts",
-        type: "folder",
-        children: [
-          {
-            id: "fonts-small",
-            label: "SMALL Fonts",
-            type: "font-type",
-            children: smallPlanes,
-          },
-          {
-            id: "fonts-large",
-            label: "LARGE Fonts",
-            type: "font-type",
-            children: largePlanes,
-          },
-        ],
-      },
-      ...(treeNodes.length > 1 ? [treeNodes[1]] : []), // Preserve images if already added
-    ];
-
-    // Keep tree nodes collapsed by default
-  }
-
-  // Build image tree structure
-  function buildImageTree(images: BitmapFileInfo[]) {
-    const imageNodes = images.map((img, idx) => {
-      return {
-        id: `image-${idx}`,
-        label: img.name,
-        type: "image" as const,
-        data: img, // Use the image data directly with offset from worker
-        children: [],
-      };
-    });
-
-    // Update or add images folder
-    const imagesNode = {
-      id: "images",
-      label: "Firmware Images",
-      type: "folder" as const,
-      children: imageNodes,
-    };
-
-    if (treeNodes.length > 0 && treeNodes[0].id === "fonts") {
-      treeNodes = [treeNodes[0], imagesNode];
-    } else {
-      treeNodes = [...treeNodes, imagesNode];
-    }
-  }
-
-  // Handle tree node click
-  function handleNodeClick(node: TreeNode) {
-    if (isProcessing) return; // Don't allow new selection while processing
-
-    // Clear old data first to avoid showing stale content
-    planeData = null;
-    imageData = null;
-
-    selectedNode = node;
-
-    if (node.type === "plane" && node.data) {
-      loadPlane(node.data as FontPlaneInfo);
-    } else if (node.type === "image" && node.data) {
-      const image = node.data as BitmapFileInfo;
-      if (image.offset === undefined) {
-        statusMessage = `Error: Image ${image.name} has no offset information`;
-        return;
-      }
-      loadImage(image);
-    }
-  }
-
-  // Find node by ID (recursive helper)
-  function findNodeById(nodes: TreeNode[], id: string): TreeNode | null {
-    for (const node of nodes) {
-      if (node.id === id) return node;
-      if (node.children) {
-        const found = findNodeById(node.children, id);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-
-  // Handle tree node selection from TreeView onSelect
-  function handleSelectNode(nodeId: string) {
-    const node = findNodeById(treeNodes, nodeId);
-    if (node) {
-      handleNodeClick(node);
-    }
-  }
-
-  // Load font plane
-  function loadPlane(plane: FontPlaneInfo) {
-    if (!worker || !firmwareData || isProcessing) return;
-
-    isProcessing = true;
-    statusMessage = `Extracting ${plane.name} (${plane.fontType})...`;
-    imageData = null; // Clear image data
-
-    worker.postMessage({
-      type: "extractPlane",
-      id: "extractPlane",
-      firmware: new Uint8Array(), // Worker uses cached data
-      fontType: plane.fontType,
-      planeName: plane.name,
-      start: plane.start,
-      end: plane.end,
-    });
-  }
-
-  // Load image
-  function loadImage(image: BitmapFileInfo) {
-    if (!worker || !firmwareData || isProcessing) return;
-
-    isProcessing = true;
-    statusMessage = `Extracting ${image.name}...`;
-    planeData = null; // Clear plane data
-
-    worker.postMessage({
-      type: "extractImage",
-      id: "extractImage",
-      firmware: new Uint8Array(),
-      imageName: image.name,
-      width: image.width,
-      height: image.height,
-      offset: image.offset,
-    });
-  }
-
-  // File handling
-  function handleFileSelect(e: Event) {
-    const target = e.target as HTMLInputElement;
-    const file = target.files?.[0];
-    if (file) {
-      loadFirmware(file);
-    }
-    // Reset input so the same file can be selected again
-    target.value = "";
-  }
-
-  async function loadFirmware(file: File) {
-    isProcessing = true;
-    progress = 10;
-    statusMessage = `Loading ${file.name}...`;
-
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      firmwareData = new Uint8Array(arrayBuffer);
-      // Store original for rollback
-      originalFirmwareData = new Uint8Array(arrayBuffer);
-
-      // Clear replacement tracking lists for new firmware
-      replacedImages = [];
-      replacedSmallFontCharacters = new Set();
-      replacedLargeFontCharacters = new Set();
-
-      progress = 30;
-      statusMessage = "Analyzing firmware...";
-
-      // Analyze firmware
-      worker!.postMessage({
-        type: "analyze",
-        id: "analyze",
-        firmware: firmwareData,
-      });
-
-      progress = 100;
-    } catch (err) {
-      statusMessage = `Error loading file: ${err}`;
-      isProcessing = false;
-    }
-  }
-
-  // Handle paste event - searches for matching image by filename
-  // Processes multiple files in batch via worker
-  async function handlePasteFiles(files: File[]) {
-    // Check for font files first - separate them from image processing
-    const fontFiles = files.filter(isFontFile);
-    const imageFiles = files.filter((f) => !isFontFile(f));
-
-    if (fontFiles.length > 0) {
-      // Font file detected - route to font replacement flow
-      await replaceFont(fontFiles[0]);
-      return;
-    }
-
-    if (!firmwareData || imageList.length === 0) {
-      showWarningDialog("Error", "No firmware loaded or no images available.");
-      return;
-    }
-
-    if (!worker) {
-      showWarningDialog("Error", "Worker not available.");
-      return;
-    }
-
-    isProcessing = true;
-    statusMessage = `Preparing to replace ${imageFiles.length} image(s)...`;
-
-    // Collect all valid replacements
-    const replacements: Array<{
-      image: BitmapFileInfo;
-      rgb565Data: Uint8Array;
-    }> = [];
-    const notFound: string[] = [];
-    const decodeError: string[] = [];
-
-    // Convert all files to RGB565 in parallel
-    const conversionPromises = imageFiles.map(async (file) => {
-      const pastedFileName = file.name.replace(/\.[^.]*$/, "").toUpperCase();
-
-      const matchingImage = imageList.find(
-        (img) =>
-          img.name.replace(/\.[^.]*$/, "").toUpperCase() === pastedFileName,
-      );
-
-      if (!matchingImage) {
-        notFound.push(file.name);
-        return null;
-      }
-
-      if (!matchingImage.offset) {
-        decodeError.push(`${file.name}: No offset information`);
-        return null;
-      }
-
-      try {
-        const rgb565Result = await imageToRgb565(
-          file,
-          matchingImage.width,
-          matchingImage.height,
-        );
-
-        if (!rgb565Result) {
-          decodeError.push(
-            `${file.name}: Dimension mismatch (expected ${matchingImage.width}x${matchingImage.height})`,
-          );
-          return null;
-        }
-
-        return { image: matchingImage, rgb565Data: rgb565Result.rgb565Data };
-      } catch (err) {
-        decodeError.push(`${file.name}: Failed to decode`);
-        return null;
-      }
-    });
-
-    const results = await Promise.all(conversionPromises);
-
-    // Filter out null results and collect valid replacements
-    for (const result of results) {
-      if (result) {
-        replacements.push(result);
-      }
-    }
-
-    if (replacements.length === 0) {
-      isProcessing = false;
-      let message = "No valid images to replace.\n\n";
-
-      if (notFound.length > 0) {
-        message += `Not found in firmware (${notFound.length}):\n${notFound.slice(0, 5).join(", ")}${notFound.length > 5 ? "..." : ""}\n\n`;
-      }
-
-      if (decodeError.length > 0) {
-        message += `Errors (${decodeError.length}):\n${decodeError.slice(0, 3).join("\n")}${decodeError.length > 3 ? "\n..." : ""}`;
-      }
-
-      showWarningDialog("Replacement Failed", message.trim());
-      return;
-    }
-
-    statusMessage = `Sending ${replacements.length} image(s) to worker...`;
-
-    // Send batch replacement request to worker
-    await new Promise<void>((resolve) => {
-      const handler = (e: MessageEvent) => {
-        const { type, id, result } = e.data;
-
-        if (id === "replaceImages") {
-          // Only handle success/error messages, ignore progress
-          if (type === "success") {
-            worker!.removeEventListener("message", handler);
-
-            const data = result as {
-              successCount: number;
-              notFound: string[];
-              dimensionMismatch: string[];
-              replaceError: string[];
-              results: Array<{ imageName: string; rgb565Data: Uint8Array }>;
-            };
-
-            // Update image display for currently selected image
-            for (const r of data.results) {
-              if (imageData && imageData.name === r.imageName) {
-                imageData = {
-                  name: r.imageName,
-                  width: imageData.width,
-                  height: imageData.height,
-                  rgb565Data: r.rgb565Data,
-                };
-              }
-            }
-
-            // Track replaced images - append new names to array
-            for (const r of data.results) {
-              if (!replacedImages.includes(r.imageName)) {
-                replacedImages = [...replacedImages, r.imageName];
-              }
-            }
-
-            // Combine errors from main thread and worker
-            const allNotFound = [...notFound, ...(data.notFound || [])];
-            const allDimensionMismatch = [
-              ...decodeError.filter((e) => e.includes("Dimension mismatch")),
-              ...(data.dimensionMismatch || []),
-            ];
-            const allReplaceError = [
-              ...decodeError.filter((e) => !e.includes("Dimension mismatch")),
-              ...(data.replaceError || []),
-            ];
-
-            const totalErrors =
-              allNotFound.length +
-              allDimensionMismatch.length +
-              allReplaceError.length;
-
-            if (totalErrors > 0) {
-              let message = `Successfully replaced: ${data.successCount}\n\n`;
-
-              if (allNotFound.length > 0) {
-                message += `Not found in firmware (${allNotFound.length}):\n${allNotFound.slice(0, 5).join(", ")}${allNotFound.length > 5 ? "..." : ""}\n\n`;
-              }
-
-              if (allDimensionMismatch.length > 0) {
-                message += `Dimension mismatch (${allDimensionMismatch.length}):\n${allDimensionMismatch.slice(0, 3).join("\n")}${allDimensionMismatch.length > 3 ? "\n..." : ""}\n\n`;
-              }
-
-              if (allReplaceError.length > 0) {
-                message += `Replacement errors (${allReplaceError.length}):\n${allReplaceError.slice(0, 3).join("\n")}${allReplaceError.length > 3 ? "\n..." : ""}\n\n`;
-              }
-
-              showWarningDialog(
-                "Replacement Completed with Errors",
-                message.trim(),
-              );
-            } else {
-              statusMessage = `Successfully replaced ${data.successCount} image(s)`;
-            }
-
-            isProcessing = false;
-            resolve();
-          } else if (type === "error") {
-            worker!.removeEventListener("message", handler);
-            showWarningDialog(
-              "Replacement Error",
-              `Failed to replace images: ${result}`,
-            );
-            isProcessing = false;
-            resolve();
-          }
-          // For progress messages, just continue waiting
-        }
-      };
-
-      worker!.addEventListener("message", handler);
-
-      worker!.postMessage({
-        type: "replaceImages",
-        id: "replaceImages",
-        firmware: new Uint8Array(),
-        images: replacements.map((r) => ({
-          imageName: r.image.name,
-          width: r.image.width,
-          height: r.image.height,
-          offset: r.image.offset!,
-          rgb565Data: r.rgb565Data,
-        })),
-      });
-    });
-  }
-
-  // Export firmware with timestamp
-  async function exportFirmware() {
-    if (!firmwareData || !worker) {
-      showWarningDialog("Export Error", "No firmware data to export.");
-      return;
-    }
-
-    isProcessing = true;
-    statusMessage = "Retrieving modified firmware...";
-
-    try {
-      // Request the modified firmware from the worker
-      const modifiedFirmware = await new Promise<Uint8Array>(
-        (resolve, reject) => {
-          const handler = (e: MessageEvent) => {
-            const data = e.data;
-            if (data.id === "exportFirmware") {
-              worker!.removeEventListener("message", handler);
-              if (data.type === "success") {
-                resolve(data.result as Uint8Array);
-              } else {
-                reject(
-                  new Error(
-                    data.error || "Failed to retrieve modified firmware",
-                  ),
-                );
-              }
-            }
-          };
-
-          worker!.addEventListener("message", handler);
-          worker!.postMessage({
-            type: "getFirmware",
-            id: "exportFirmware",
-            firmware: new Uint8Array(),
-          });
-        },
-      );
-
-      // Update the main thread's firmware data with the modified version
-      firmwareData = modifiedFirmware;
-
-      const now = new Date();
-      const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, -5);
-      const filename = `firmware_modified_${timestamp}.bin`;
-
-      await fileIO.writeFile(filename, firmwareData);
-      statusMessage = `Firmware exported as ${filename}`;
-    } catch (err) {
-      showWarningDialog(
-        "Export Error",
-        `Failed to export firmware: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    } finally {
-      isProcessing = false;
-    }
-  }
-
-  // Bundle all firmware images as ZIP
-  async function bundleImagesAsZip() {
-    if (!firmwareData || !worker) {
-      showWarningDialog("Export Error", "No firmware data to export.");
-      return;
-    }
-
-    isProcessing = true;
-    statusMessage = "Preparing image bundle...";
-
-    try {
-      // Request ZIP bundle from worker with progress tracking
-      const zipData = await new Promise<Uint8Array>((resolve, reject) => {
-        const handler = (e: MessageEvent) => {
-          const data = e.data;
-          if (data.id === "bundleImagesAsZip") {
-            // Only handle success/error, ignore progress
-            if (data.type === "success") {
-              worker!.removeEventListener("message", handler);
-              resolve(data.result as Uint8Array);
-            } else if (data.type === "error") {
-              worker!.removeEventListener("message", handler);
-              reject(new Error(data.error || "Failed to bundle images"));
-            }
-            // For progress messages, just continue waiting
-          }
-        };
-
-        worker!.addEventListener("message", handler);
-        worker!.postMessage({
-          type: "bundleImagesAsZip",
-          id: "bundleImagesAsZip",
-          firmware: new Uint8Array(),
-        });
-      });
-
-      const now = new Date();
-      const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, -5);
-      const filename = `firmware_images_${timestamp}.zip`;
-
-      await fileIO.writeFile(filename, zipData);
-      statusMessage = `Images exported as ${filename}`;
-    } catch (err) {
-      showWarningDialog(
-        "Export Error",
-        `Failed to bundle images: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    } finally {
-      isProcessing = false;
-    }
-  }
-
-  // Show warning dialog
-  function showWarningDialog(title: string, message: string) {
-    warningTitle = title;
-    warningMessage = message;
-    showWarning = true;
-  }
-
-  // Font file type detection
-  const FONT_EXTENSIONS = [".ttf", ".otf", ".woff", ".woff2"];
-  const FONT_MIME_TYPES = [
-    "font/ttf",
-    "font/otf",
-    "font/woff",
-    "font/woff2",
-    "application/font-ttf",
-    "application/font-otf",
-    "application/font-woff",
-    "application/font-woff2",
-    "application/x-font-ttf",
-    "application/x-font-otf",
-    "application/x-font-woff",
-  ];
-
-  function isFontFile(file: File): boolean {
-    const fileName = file.name.toLowerCase();
-    const hasFontExtension = FONT_EXTENSIONS.some((ext) =>
-      fileName.endsWith(ext),
-    );
-    const hasFontMime = FONT_MIME_TYPES.includes(file.type);
-    return hasFontExtension || hasFontMime;
-  }
-
-  // Unicode ranges for font replacement (imported from shared module)
-  // SMALL fonts support 0x0000-0xffff (Basic Latin, Latin-1, etc.)
-  // LARGE fonts support CJK range 0x4e00-0x9fff
-
-  // Orchestrate font replacement process
-  async function replaceFont(file: File): Promise<void> {
-    if (!worker || !firmwareData) {
-      showWarningDialog("Error", "No firmware loaded or worker not available.");
-      return;
-    }
-
-    if (isProcessing) {
-      showWarningDialog(
-        "Busy",
-        "A replacement is already in progress. Please wait.",
-      );
-      return;
-    }
-
-    isProcessing = true;
-    loadingTitle = "Replacing Font Glyphs";
-    statusMessage = `Loading font file: ${file.name}...`;
-    progress = 0; // Reset progress
-
-    let fontResult: FontLoadingResult | null = null;
-
-    try {
-      // Step 1: Load and validate the font file
-      fontResult = await loadAndValidateFontFile(file);
-      const { fontFamily, detectedType, isUncertain, debugImages, fontData, fileName: resultFileName } = fontResult;
-
-      // Check if font type is uncertain - need user confirmation
-      if (isUncertain) {
-        pendingFontConfirmation = {
-          fontFamily,
-          fontData,
-          fileName: resultFileName,
-          debugImages,
-        };
-        showFontSizeConfirmation = true;
-        isProcessing = false;
-        return; // Wait for user to confirm font size
-      }
-
-      if (!detectedType) {
-        showWarningDialog(
-          "Invalid Font File",
-          `The font file "${resultFileName}" could not be validated. ` +
-            `Please ensure it is a pixel art font designed for 12px or 16px size.`,
-        );
-        return;
-      }
-
-      // Cast to confirmed type since we've checked isUncertain and detectedType is not null
-      const confirmedType = detectedType as "SMALL" | "LARGE";
-
-      statusMessage = `Font loaded as ${confirmedType}. Preparing replacement...`;
-
-      // Step 2: Load tofu font for missing character detection
-      await loadTofuFont();
-
-      // Step 3: Determine Unicode ranges to process based on font type
-      const fontSize = confirmedType === "SMALL" ? 12 : 16;
-      let codePointsToProcess: number[] = [];
-
-      if (confirmedType === "SMALL") {
-        // SMALL fonts: process ranges 0x0000-0xffff
-        for (const range of UNICODE_RANGES) {
-          const start = Math.max(range.start, 0x0000);
-          const end = Math.min(range.end, 0xffff);
-          if (start <= end) {
-            for (let cp = start; cp <= end; cp++) {
-              codePointsToProcess.push(cp);
-            }
-          }
-        }
-      } else {
-        // LARGE fonts: only process CJK range 0x4e00-0x9fff
-        for (let cp = 0x4e00; cp <= 0x9fff; cp++) {
-          codePointsToProcess.push(cp);
-        }
-      }
-
-      statusMessage = `Replacing ${codePointsToProcess.length} font characters...`;
-      progress = 10; // Start at 10%
-
-      // Store font result so it can be used for preview
-      previewFontResult = fontResult;
-
-      // Step 4: PREVIEW MODE - Run tofu detection first to show debug window
-      if (debug) {
-        statusMessage = "Running tofu detection preview...";
-
-        // Combine first 50 from range + all rare test chars for preview
-        const previewCodePoints = [
-          ...codePointsToProcess.slice(0, 50),
-          ...RARE_TEST_CHARS,
-        ];
-
-        await runTofuDetectionPreview(fontFamily, fontSize, previewCodePoints, fontData);
-
-        console.log("[handleFileLoad] After preview:", {
-          tofuDebugDataLength: tofuDebugData.length,
-          showTofuDebugBefore: showTofuDebug,
-        });
-
-        if (tofuDebugData.length > 0) {
-          pendingReplacement = {
-            fontFamily,
-            fontSize,
-            fontType: confirmedType,
-            codePoints: codePointsToProcess,
-          };
-          showTofuDebug = true;
-          isProcessing = false; // Allow user to decide
-          return; // Wait for user confirmation
-        }
-      }
-
-      // Step 5: Proceed with actual replacement
-      await performFontReplacement(
-        fontFamily,
-        fontSize,
-        confirmedType,
-        codePointsToProcess,
-        fontData,
-      );
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-
-      // Show specific modal for invalid font files (non-pixel-perfect)
-      if (err instanceof FontLoadingError) {
-        // Check if we have debug images
-        if (err.debugImages && err.debugImages.length > 0) {
-          // Store debug data and show warning with "See Details" button
-          fontDebugFileName = err.fileName;
-          fontDebugMessage = errorMessage;
-          fontDebugImages = err.debugImages;
-          showFontDebug = true;
-        } else {
-          showWarningDialog("Invalid Font File", errorMessage);
-        }
-      } else {
-        showWarningDialog(
-          "Font Replacement Error",
-          `Failed to replace font:\n${errorMessage}`,
-        );
-      }
-      statusMessage = `Font replacement failed: ${errorMessage}`;
-    } finally {
-      // Clean up font resources - ONLY if we're not showing the preview dialog
-      // If the preview dialog is shown, the font will be needed when user clicks Confirm
-      if (fontResult && !showTofuDebug) {
-        unloadFontFile(fontResult.fontFace, fontResult.fontFamily);
-      }
-      isProcessing = false;
-      loadingTitle = undefined;
-    }
-  }
-
-  // Run tofu detection preview - uses dedicated tofu-detector module
-  async function runTofuDetectionPreview(
-    fontFamily: string,
-    fontSize: 12 | 16,
-    codePoints: number[],
-    fontData: ArrayBuffer,
-  ): Promise<void> {
-    console.log("[runTofuDetectionPreview] Starting tofu detection preview...", {
-      fontFamily,
-      fontSize,
-      codePointCount: codePoints.length,
-      hasWorker: !!worker,
-      hasFontData: !!fontData,
-    });
-
-    // Run tofu detection with detailed debug output
-    const result = await detectTofu(worker!, {
-      fontFamily,
-      fontSize,
-      codePoints,
-      fontData,
-    });
-
-    if (!result.success) {
-      console.error("[runTofuDetectionPreview] Failed:", result.error);
-      tofuDebugData = [];
-      // Throw error to signal caller that tofu detection failed
-      throw new Error(`Tofu detection failed: ${result.error || 'Unknown error'}`);
-    }
-
-    console.log("[runTofuDetectionPreview] Detection complete:", {
-      total: result.debugData.length,
-      tofu: result.debugData.filter((d) => d.match).length,
-    });
-
-    // Log the structure of the first item to debug
-    if (result.debugData.length > 0) {
-      const first = result.debugData[0];
-      console.log("[runTofuDetectionPreview] First item keys:", Object.keys(first));
-      console.log("[runTofuDetectionPreview] First item has boundingBox1:", 'boundingBox1' in first);
-      console.log("[runTofuDetectionPreview] First item boundingBox1:", first.boundingBox1);
-    }
-
-    tofuDebugData = result.debugData;
-    console.log("[runTofuDetectionPreview] tofuDebugData assigned:", {
-      length: tofuDebugData.length,
-      firstItemHasBB1: tofuDebugData[0]?.boundingBox1,
-    });
-  }
-
-  // Perform the font replacement entirely in worker (no data shuttling)
-  async function performFontReplacement(
-    fontFamily: string,
-    fontSize: 12 | 16,
-    fontType: "SMALL" | "LARGE",
-    codePointsToProcess: number[],
-    fontData: ArrayBuffer,
-  ): Promise<void> {
-    // Re-enable tofu debug mode for actual replacement
-    setTofuDebugMode(debug);
-
-    // Set up handler for worker-based replacement
-    let finishHandler: ((e: MessageEvent) => void) | null = null;
-
-    const resultPromise = new Promise<void>((resolve, reject) => {
-      finishHandler = (e: MessageEvent) => {
-        const { type, id, result, error, message } = e.data;
-
-        if (id === "replaceFontsWorker") {
-          // Ignore progress messages - just update status and progress bar
-          if (type === "progress") {
-            statusMessage = message;
-            progress = e.data.progress;
-            return; // Don't remove handler for progress
-          }
-
-          // Remove handler for success/error
-          worker!.removeEventListener("message", finishHandler!);
-          finishHandler = null;
-
-          if (type === "success") {
-            const data = result as {
-              successCount: number;
-              skippedCount: number;
-              errors: string[];
-              replacedCharacters: number[];
-              skippedCharacters: number[];
-            };
-
-            // Add replaced characters to tracking
-            const targetSet = fontType === "SMALL" ? replacedSmallFontCharacters : replacedLargeFontCharacters;
-            const mergedChars = new Set([...targetSet, ...data.replacedCharacters]);
-
-            if (fontType === "SMALL") {
-              replacedSmallFontCharacters = mergedChars;
-            } else {
-              replacedLargeFontCharacters = mergedChars;
-            }
-
-            statusMessage = `Font replacement completed: ${data.successCount} replaced, ${data.skippedCount} skipped`;
-            progress = 100;
-
-            if (data.errors.length > 0) {
-              console.warn("Font replacement errors:", data.errors);
-            }
-
-            resolve();
-          } else {
-            reject(new Error(error || "Font replacement failed"));
-          }
-        }
-      };
-    });
-
-    // Add handler before sending request
-    worker!.addEventListener("message", finishHandler!);
-
-    // Send complete font replacement request to worker
-    // Worker handles: loading fonts, tofu detection, extraction, encoding, firmware writing
-    // Note: firmwareData must be cloned to avoid proxy cloning issues
-    const messageData = {
-      type: "replaceFontsWorker",
-      id: "replaceFontsWorker",
-      fontData,
-      fontFamily,
-      fontSize,
-      fontType,
-      firmware: firmwareData ? new Uint8Array(firmwareData) : null,
-      codePoints: codePointsToProcess,
-    };
-    console.log("[performFontReplacement] Sending to worker:", {
-      fontFamily,
-      fontSize,
-      fontType,
-      codePointsCount: codePointsToProcess.length,
-      firmwareLength: firmwareData?.length,
-      fontDataSize: fontData?.byteLength,
-    });
-    try {
-      worker!.postMessage(messageData);
-    } catch (err) {
-      console.error("[performFontReplacement] postMessage error:", err);
-      throw err;
-    }
-
-    await resultPromise;
-  }
-
-  // Confirm font replacement after preview
-  async function confirmFontReplacement(): Promise<void> {
-    if (!pendingReplacement) {
-      showTofuDebug = false;
-      return;
-    }
-
-    // Extract values - use structuredClone to get plain objects from Svelte 5 proxies
-    const pr = structuredClone(pendingReplacement);
-    const { fontFamily, fontSize, fontType, codePoints } = pr;
-    pendingReplacement = null;
-    showTofuDebug = false;
-
-    isProcessing = true;
-    statusMessage = "Proceeding with font replacement...";
-    progress = 5;
-
-    // Get font data from preview
-    const fontData = previewFontResult?.fontData;
-    if (!fontData) {
-      showWarningDialog("Error", "Font data not available");
-      return;
-    }
-
-    try {
-      await performFontReplacement(fontFamily, fontSize, fontType, codePoints, fontData);
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      showWarningDialog(
-        "Font Replacement Error",
-        `Failed to replace font:\n${errorMessage}`,
-      );
-      statusMessage = `Font replacement failed: ${errorMessage}`;
-    } finally {
-      // Clean up font resources from preview mode
-      if (previewFontResult) {
-        unloadFontFile(previewFontResult.fontFace, previewFontResult.fontFamily);
-        previewFontResult = null;
-      }
-      isProcessing = false;
-      loadingTitle = undefined;
-    }
-  }
-
-  // Cancel font replacement
-  function cancelFontReplacement(): void {
-    pendingReplacement = null;
-    showTofuDebug = false;
-    isProcessing = false;
-    loadingTitle = undefined;
-    statusMessage = "Font replacement cancelled";
-
-    // Clean up font resources from preview mode
-    if (previewFontResult) {
-      unloadFontFile(previewFontResult.fontFace, previewFontResult.fontFamily);
-      previewFontResult = null;
-    }
-  }
-
-  // Handle font size confirmation dialog
-  function handleFontSizeConfirm(fontType: "SMALL" | "LARGE"): void {
-    if (!pendingFontConfirmation) {
-      showFontSizeConfirmation = false;
-      return;
-    }
-
-    const { fontFamily, fontData, fileName } = pendingFontConfirmation;
-    pendingFontConfirmation = null;
-    showFontSizeConfirmation = false;
-
-    // Continue with the selected font type
-    continueFontReplacement(fontFamily, fontType, fontData, fileName);
-  }
-
-  function handleFontSizeCancel(): void {
-    pendingFontConfirmation = null;
-    showFontSizeConfirmation = false;
-    isProcessing = false;
-    loadingTitle = undefined;
-    statusMessage = "Font replacement cancelled";
-  }
-
-  // Continue font replacement after user confirmation
-  async function continueFontReplacement(
-    fontFamily: string,
-    fontType: "SMALL" | "LARGE",
-    fontData: ArrayBuffer,
-    fileName: string,
-  ): Promise<void> {
-    isProcessing = true;
-    loadingTitle = "Replacing Font Glyphs";
-    statusMessage = `Font loaded as ${fontType}. Preparing replacement...`;
-
-    try {
-      // Step 2: Load tofu font for missing character detection
-      await loadTofuFont();
-
-      // Step 3: Determine Unicode ranges to process based on font type
-      const fontSize = fontType === "SMALL" ? 12 : 16;
-      let codePointsToProcess: number[] = [];
-
-      if (fontType === "SMALL") {
-        // SMALL fonts: process ranges 0x0000-0xffff
-        for (const range of UNICODE_RANGES) {
-          const start = Math.max(range.start, 0x0000);
-          const end = Math.min(range.end, 0xffff);
-          if (start <= end) {
-            for (let cp = start; cp <= end; cp++) {
-              codePointsToProcess.push(cp);
-            }
-          }
-        }
-      } else {
-        // LARGE fonts: only process CJK range 0x4e00-0x9fff
-        for (let cp = 0x4e00; cp <= 0x9fff; cp++) {
-          codePointsToProcess.push(cp);
-        }
-      }
-
-      statusMessage = `Replacing ${codePointsToProcess.length} font characters...`;
-      progress = 10;
-
-      // Store font result so it can be used for preview
-      previewFontResult = {
-        fontFace: new FontFace("ConfirmedFont", fontData),
-        fontFamily,
-        detectedType: fontType,
-        isUncertain: false,
-        fileName,
-        isPixelPerfect: true,
-        fontData,
-      };
-
-      // Step 4: PREVIEW MODE - Run tofu detection first to show debug window
-      if (debug) {
-        statusMessage = "Running tofu detection preview...";
-
-        // Combine first 50 from range + all rare test chars for preview
-        const previewCodePoints = [
-          ...codePointsToProcess.slice(0, 50),
-          ...RARE_TEST_CHARS,
-        ];
-
-        await runTofuDetectionPreview(fontFamily, fontSize, previewCodePoints, fontData);
-
-        if (tofuDebugData.length > 0) {
-          pendingReplacement = {
-            fontFamily,
-            fontSize,
-            fontType,
-            codePoints: codePointsToProcess,
-          };
-          showTofuDebug = true;
-          isProcessing = false;
-          return;
-        }
-      }
-
-      // Step 5: Proceed with actual replacement
-      await performFontReplacement(
-        fontFamily,
-        fontSize,
-        fontType,
-        codePointsToProcess,
-        fontData,
-      );
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      showWarningDialog(
-        "Font Replacement Error",
-        `Failed to replace font:\n${errorMessage}`,
-      );
-      statusMessage = `Font replacement failed: ${errorMessage}`;
-    } finally {
-      if (previewFontResult) {
-        unloadFontFile(previewFontResult.fontFace, previewFontResult.fontFamily);
-        previewFontResult = null;
-      }
-      isProcessing = false;
-      loadingTitle = undefined;
-    }
-  }
-
-  // Handle keyboard shortcuts (Ctrl+S for export)
+  // Keyboard handlers
   function handleKeyDown(e: KeyboardEvent) {
     if (e.ctrlKey && e.key === "s") {
       e.preventDefault();
-      exportFirmware();
+      fwState.exportFirmware();
     }
   }
 
-  // Handle sequence replacement
-  async function handleSequenceReplace(
-    mappings: { target: BitmapFileInfo; source: File }[],
-  ) {
-    isProcessing = true;
-    statusMessage = `Processing ${mappings.length} images...`;
+  // Paste handler
+  async function handlePaste(e: ClipboardEvent) {
+    if (fwState.isProcessing) {
+      fwState.showWarningDialog("Busy", "A replacement is already in progress.");
+      return;
+    }
 
-    const replacements: SequenceReplacement[] = [];
+    const items = e.clipboardData?.items;
+    if (!items) return;
 
-    try {
-      for (const { target, source } of mappings) {
-        const rgb565Result = await imageToRgb565(
-          source,
-          target.width,
-          target.height,
-          { resize: true, grayscale: false },
-        );
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const file = item.getAsFile();
+      if (file) files.push(file);
+    }
 
-        if (!rgb565Result) throw new Error(`Failed to process ${source.name}`);
+    if (files.length === 0) return;
 
-        replacements.push({
-          imageName: target.name,
-          width: target.width,
-          height: target.height,
-          offset: target.offset!,
-          rgb565Data: rgb565Result.rgb565Data,
-        });
+    const fontFiles = files.filter(f => fwState.isFontFile(f));
+    if (fontFiles.length > 0) {
+      await fwState.replaceFont(fontFiles[0]);
+      return;
+    }
+
+    const imageFiles = files.filter((f) => !fwState.isFontFile(f));
+    if (imageFiles.length === 0) return;
+
+    if (imageFiles.length === 1 && fwState.selectedNode?.type === "image" && fwState.imageData) {
+      await fwState.replaceCurrentlySelectedImage(imageFiles[0]);
+    } else {
+      await fwState.handlePasteFiles(imageFiles);
+    }
+  }
+
+  // File selection
+  function handleFileSelect(e: Event) {
+    const target = e.target as HTMLInputElement;
+    const file = target.files?.[0];
+    if (file) fwState.loadFirmware(file);
+    target.value = "";
+  }
+
+  async function handleEditFileSelect(e: Event) {
+    const target = e.target as HTMLInputElement;
+    const files = target.files;
+    if (files && files.length > 0) {
+      const fileArray = Array.from(files);
+      const fontFiles = fileArray.filter(f => fwState.isFontFile(f));
+      if (fontFiles.length > 0) {
+        await fwState.replaceFont(fontFiles[0]);
+      } else if (fileArray.length === 1 && fwState.selectedNode?.type === "image" && fwState.imageData) {
+        await fwState.replaceCurrentlySelectedImage(fileArray[0]);
+      } else {
+        await fwState.handlePasteFiles(fileArray);
       }
-
-      await new Promise<void>((resolve, reject) => {
-        const handler = (e: MessageEvent) => {
-          const { type, id, result, error } = e.data;
-          if (id === "replaceSequence") {
-            if (type === "progress") return;
-
-            worker!.removeEventListener("message", handler);
-            if (type === "success") {
-              // Update replaced images list
-              for (const r of replacements) {
-                if (!replacedImages.includes(r.imageName)) {
-                  replacedImages = [...replacedImages, r.imageName];
-                }
-              }
-              statusMessage = `Successfully replaced ${replacements.length} images`;
-              resolve();
-            } else {
-              reject(new Error(error || "Worker failed to replace sequence"));
-            }
-          }
-        };
-
-        worker!.addEventListener("message", handler);
-
-        worker!.postMessage({
-          type: "replaceImages",
-          id: "replaceSequence",
-          firmware: new Uint8Array(),
-          images: replacements,
-        });
-      });
-    } catch (err) {
-      showWarningDialog(
-        "Sequence Replacement Failed",
-        err instanceof Error ? err.message : String(err),
-      );
-    } finally {
-      isProcessing = false;
     }
+    target.value = "";
   }
 
-  // Drag and drop handlers
+  // Drag and Drop
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
     isDragOver = true;
-    dropZone.classList.add("drag-over");
+    if (dropZone) dropZone.classList.add("drag-over");
   }
 
   function handleDragLeave(e: DragEvent) {
     e.preventDefault();
     isDragOver = false;
-    dropZone.classList.remove("drag-over");
+    if (dropZone) dropZone.classList.remove("drag-over");
   }
 
   async function handleDrop(e: DragEvent) {
     e.preventDefault();
     isDragOver = false;
-    dropZone.classList.remove("drag-over");
-
+    if (dropZone) dropZone.classList.remove("drag-over");
     const file = e.dataTransfer?.files[0];
-    if (file) {
-      loadFirmware(file);
-    }
+    if (file) fwState.loadFirmware(file);
   }
 
-  // Drag & drop handlers for image replacement
   function handleImageDragOver(e: DragEvent) {
     e.preventDefault();
-    // Check if any file is being dragged
-    if (e.dataTransfer?.types.includes("Files")) {
-      isImageDragOver = true;
-    }
+    if (e.dataTransfer?.types.includes("Files")) isImageDragOver = true;
   }
 
   function handleImageDragLeave(e: DragEvent) {
@@ -1489,168 +163,33 @@
   async function handleImageDrop(e: DragEvent) {
     e.preventDefault();
     isImageDragOver = false;
-
-    if (!firmwareData || imageList.length === 0) {
-      return;
-    }
+    if (!fwState.firmwareData || fwState.imageList.length === 0) return;
 
     const files = Array.from(e.dataTransfer?.files ?? []);
     if (files.length === 0) return;
 
-    // Check for font files first
-    const fontFiles = files.filter(isFontFile);
+    const fontFiles = files.filter(f => fwState.isFontFile(f));
     if (fontFiles.length > 0) {
-      // Font file detected - route to font replacement flow
-      await replaceFont(fontFiles[0]);
+      await fwState.replaceFont(fontFiles[0]);
       return;
     }
 
-    // Smart Replacement Logic:
-    // If exactly ONE file is dropped, AND we have an image selected,
-    // we assume the user wants to replace THIS specific image with the dropped file.
-    if (files.length === 1 && selectedNode?.type === "image" && imageData) {
-      await replaceCurrentlySelectedImage(files[0]);
-      return;
-    }
-
-    // Default: Process dropped files as batch replacement by filename
-    await handlePasteFiles(files);
-  }
-
-  // Helper: Replace currently selected image with specific file (Smart Replace)
-  async function replaceCurrentlySelectedImage(file: File) {
-    if (!selectedNode || selectedNode.type !== "image" || !imageData) return;
-
-    // Confirm replacement? (Optional, currently direct action)
-    isProcessing = true;
-    statusMessage = `Processing ${file.name} for ${imageData.name}...`;
-
-    try {
-      // Auto-resize and format the image to match the target
-      const rgb565Result = await imageToRgb565(
-        file,
-        imageData.width,
-        imageData.height,
-        { resize: true, grayscale: false },
-      );
-
-      if (!rgb565Result) {
-        throw new Error("Failed to process image");
-      }
-
-      // Send replacement to worker
-      const replacement = {
-        imageName: imageData.name,
-        width: imageData.width,
-        height: imageData.height,
-        offset: (selectedNode.data as BitmapFileInfo).offset!,
-        rgb565Data: rgb565Result.rgb565Data,
-      };
-
-      await new Promise<void>((resolve, reject) => {
-        const handler = (e: MessageEvent) => {
-          const { type, id, result, error } = e.data;
-
-          if (id === "replaceSingleImage") {
-            // Ignore progress messages
-            if (type === "progress") return;
-
-            worker!.removeEventListener("message", handler);
-
-            if (type === "success") {
-              // Update UI
-              if (imageData) {
-                imageData.rgb565Data = replacement.rgb565Data;
-              }
-              if (!replacedImages.includes(replacement.imageName)) {
-                replacedImages = [...replacedImages, replacement.imageName];
-              }
-              statusMessage = `Successfully replaced ${replacement.imageName}`;
-              resolve();
-            } else {
-              reject(new Error(error || "Worker failed to replace image"));
-            }
-          }
-        };
-
-        worker!.addEventListener("message", handler);
-
-        worker!.postMessage({
-          type: "replaceImages",
-          id: "replaceSingleImage",
-          firmware: new Uint8Array(),
-          images: [replacement],
-        });
-      });
-    } catch (err) {
-      showWarningDialog(
-        "Replacement Failed",
-        `Failed to process ${file.name}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    } finally {
-      isProcessing = false;
+    if (files.length === 1 && fwState.selectedNode?.type === "image" && fwState.imageData) {
+      await fwState.replaceCurrentlySelectedImage(files[0]);
+    } else {
+      await fwState.handlePasteFiles(files);
     }
   }
 
-  // Trigger file input
-  function triggerFileInput() {
-    fileInput.click();
-  }
-
-  // Trigger edit file input for multiple file selection
-  function triggerEditFileInput() {
-    editFileInput.click();
-  }
-
-  // Handle edit file select (multiple files)
-  async function handleEditFileSelect(e: Event) {
-    const target = e.target as HTMLInputElement;
-    const files = target.files;
-    if (files && files.length > 0) {
-      const fileArray = Array.from(files);
-
-      // Check for font files first (consistent with DnD behavior)
-      const fontFiles = fileArray.filter(isFontFile);
-      if (fontFiles.length > 0) {
-        await replaceFont(fontFiles[0]);
-        target.value = "";
-        return;
-      }
-
-      // Check for single file smart replacement context
-      if (fileArray.length === 1 && selectedNode?.type === "image" && imageData) {
-        await replaceCurrentlySelectedImage(fileArray[0]);
-      } else {
-        await handlePasteFiles(fileArray);
-      }
-    }
-    // Reset input so the same files can be selected again
-    target.value = "";
-  }
-
-  // Handle close button on resource viewer - reset and show file picker
-  function handleCloseResourceViewer() {
-    firmwareData = null;
-    treeNodes = [];
-    imageList = [];
-    selectedNode = null;
-    planeData = null;
-    imageData = null;
-    statusMessage = "Ready to load firmware";
-    // Clear replacement tracking lists
-    replacedImages = [];
-    replacedSmallFontCharacters = new Set();
-    replacedLargeFontCharacters = new Set();
-  }
+  function triggerFileInput() { fileInput?.click(); }
+  function triggerEditFileInput() { editFileInput?.click(); }
 </script>
 
 <div class="page-wrapper">
-  <!-- Hidden file input - always in DOM for toolbar button -->
   <input type="file" bind:this={fileInput} hidden onchange={handleFileSelect} />
 
   <div class="page-container">
-    <!-- Drop Zone Window - hidden when loading or loaded -->
-    {#if !firmwareData && !isProcessing}
+    {#if !fwState.firmwareData && !fwState.isProcessing}
       <Window title="FlameOcean" width="500px" showClose={false}>
         <WindowBody>
           <div
@@ -1660,121 +199,64 @@
             ondragleave={handleDragLeave}
             ondrop={handleDrop}
             onclick={triggerFileInput}
-            onkeydown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                triggerFileInput();
-              }
-            }}
+            onkeydown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), triggerFileInput())}
             role="button"
             tabindex="0"
           >
             <div class="drop-zone-content">
-              {#if !firmwareData}
-                <img
-                  src={isDragOver ? "/folder-drag-accept.png" : "/folder.png"}
-                  alt="Folder"
-                  class="folder-icon"
-                />
-                <div class="drop-text">
-                  Drop firmware file here or click to browse
-                </div>
-              {:else}
-                <img src="/folder.png" alt="Folder" class="folder-icon" />
-                <div class="drop-text">
-                  Firmware loaded! Click to load a different file
-                </div>
-              {/if}
+              <img
+                src={isDragOver ? "/folder-drag-accept.png" : "/folder.png"}
+                alt="Folder"
+                class="folder-icon"
+              />
+              <div class="drop-text">Drop firmware file here or click to browse</div>
             </div>
           </div>
         </WindowBody>
       </Window>
     {/if}
 
-    <!-- Loading Window -->
-    {#if showLoadingWindow}
-      <LoadingWindow title={loadingTitle} message={statusMessage} {progress} />
+    {#if fwState.showLoadingWindow}
+      <LoadingWindow title={fwState.loadingTitle} message={fwState.statusMessage} progress={fwState.progress} />
     {/if}
 
-    <!-- Main Browser Interface -->
-    {#if firmwareData && treeNodes.length > 0 && !showSequenceReplacer}
+    {#if fwState.firmwareData && fwState.treeNodes.length > 0 && !showSequenceReplacer}
       <Window
         title="Resource Browser"
         class="browser-window"
-        onclose={handleCloseResourceViewer}
+        onclose={() => fwState.handleCloseResourceViewer()}
       >
         <WindowBody>
-          <!-- Toolbar with icon buttons -->
           <div class="toolbar">
-            <button
-              type="button"
-              class="toolbar-button"
-              title="Open Firmware (Ctrl+O)"
-              onclick={triggerFileInput}
-              disabled={!firmwareData}
-            >
+            <button class="toolbar-button" title="Open Firmware" onclick={triggerFileInput}>
               <img src="/document-open.png" alt="" class="toolbar-icon" />
             </button>
-            <button
-              type="button"
-              class="toolbar-button"
-              title="Save Firmware (Ctrl+S)"
-              onclick={exportFirmware}
-              disabled={!firmwareData || isProcessing}
-            >
+            <button class="toolbar-button" title="Save Firmware" onclick={() => fwState.exportFirmware()} disabled={fwState.isProcessing}>
               <img src="/document-save.png" alt="" class="toolbar-icon" />
             </button>
-            <button
-              type="button"
-              class="toolbar-button"
-              title="Download All Images as ZIP"
-              onclick={bundleImagesAsZip}
-              disabled={!firmwareData || isProcessing}
-            >
+            <button class="toolbar-button" title="Download ZIP" onclick={() => fwState.bundleImagesAsZip()} disabled={fwState.isProcessing}>
               <img src="/document-export.png" alt="" class="toolbar-icon" />
             </button>
-            <button
-              type="button"
-              class="toolbar-button"
-              title="Import Images or Fonts (Ctrl+V)"
-              onclick={triggerEditFileInput}
-              disabled={!firmwareData || isProcessing}
-            >
+            <button class="toolbar-button" title="Import Files" onclick={triggerEditFileInput} disabled={fwState.isProcessing}>
               <img src="/document-edit.png" alt="" class="toolbar-icon" />
             </button>
-            <button
-              type="button"
-              class="toolbar-button"
-              title="Replace Image Sequence"
-              onclick={() => (showSequenceReplacer = !showSequenceReplacer)}
-              disabled={!firmwareData || imageList.length === 0}
-            >
+            <button class="toolbar-button" title="Sequence Replacer" onclick={() => (showSequenceReplacer = true)} disabled={fwState.imageList.length === 0}>
               <img src="/video.png" alt="" class="toolbar-icon-small" />
             </button>
-            <input
-              type="file"
-              accept=".bmp,.png,.jpg,.jpeg,.ttf,.otf,.woff,.woff2"
-              multiple
-              hidden
-              class="hidden-input"
-              bind:this={editFileInput}
-              onchange={handleEditFileSelect}
-            />
+            <input type="file" multiple hidden bind:this={editFileInput} onchange={handleEditFileSelect} />
           </div>
 
           <div class="browser-layout">
-            <!-- Tree View -->
             <div class="tree-panel">
               <TreeView
-                nodes={treeNodes}
-                expanded={expandedNodes}
-                selected={selectedNode?.id ?? ""}
-                onSelect={(nodeId) => handleSelectNode(nodeId)}
-                {replacedImages}
+                nodes={fwState.treeNodes}
+                expanded={fwState.expandedNodes}
+                selected={fwState.selectedNode?.id ?? ""}
+                onSelect={(id) => fwState.handleSelectNode(id)}
+                replacedImages={fwState.replacedImages}
               />
             </div>
 
-            <!-- Resource Content -->
             <div
               class="content-panel"
               class:drag-over-images={isImageDragOver}
@@ -1782,48 +264,37 @@
               ondragleave={handleImageDragLeave}
               ondrop={handleImageDrop}
               role="region"
-              aria-label="Image viewer - drop images here to replace"
             >
-              {#if selectedNode}
-                {#if isProcessing}
-                  <div class="empty-state">
-                    <p>Loading {selectedNode.type}...</p>
-                  </div>
-                {:else if selectedNode.type === "plane" && planeData}
+              {#if fwState.selectedNode}
+                {#if fwState.isProcessing}
+                  <div class="empty-state"><p>Loading {fwState.selectedNode.type}...</p></div>
+                {:else if fwState.selectedNode.type === "plane" && fwState.planeData}
                   <div class="plane-header">
-                    <h2>{planeData.name}</h2>
-                    <p>
-                      U+{planeData.start.toString(16).toUpperCase()} - U+{planeData.end
-                        .toString(16)
-                        .toUpperCase()}
-                    </p>
-                    <p>{planeData.fonts.length} glyphs found</p>
+                    <h2>{fwState.planeData.name}</h2>
+                    <p>U+{fwState.planeData.start.toString(16).toUpperCase()} - U+{fwState.planeData.end.toString(16).toUpperCase()}</p>
+                    <p>{fwState.planeData.fonts.length} glyphs found</p>
                   </div>
                   <div class="flex-grow">
                     <FontGridRenderer
-                      fonts={planeData.fonts}
+                      fonts={fwState.planeData.fonts}
                       zoom={10}
-                      replacedSmallChars={replacedSmallFontCharacters}
-                      replacedLargeChars={replacedLargeFontCharacters}
+                      replacedSmallChars={fwState.replacedSmallFontCharacters}
+                      replacedLargeChars={fwState.replacedLargeFontCharacters}
                     />
                   </div>
-                {:else if selectedNode.type === "image" && imageData}
+                {:else if fwState.selectedNode.type === "image" && fwState.imageData}
                   <ImageRenderer
-                    name={imageData.name}
-                    width={imageData.width}
-                    height={imageData.height}
-                    rgb565Data={imageData.rgb565Data}
+                    name={fwState.imageData.name}
+                    width={fwState.imageData.width}
+                    height={fwState.imageData.height}
+                    rgb565Data={fwState.imageData.rgb565Data}
                     zoom={2}
                   />
                 {:else}
-                  <div class="empty-state">
-                    <p>No data available for this resource</p>
-                  </div>
+                  <div class="empty-state"><p>No data available</p></div>
                 {/if}
               {:else}
-                <div class="empty-state">
-                  <p>Select a resource from the tree to view its contents</p>
-                </div>
+                <div class="empty-state"><p>Select a resource to view contents</p></div>
               {/if}
             </div>
           </div>
@@ -1831,62 +302,55 @@
       </Window>
     {/if}
 
-    <!-- Sequence Replacer Window -->
-    {#if firmwareData && treeNodes.length > 0 && showSequenceReplacer}
+    {#if fwState.firmwareData && fwState.treeNodes.length > 0 && showSequenceReplacer}
       <SequenceReplacerWindow
-        targetImages={imageList}
-        worker={worker!}
-        onApply={handleSequenceReplace}
+        targetImages={fwState.imageList}
+        worker={fwState.worker!}
+        onApply={(mappings) => fwState.handleSequenceReplace(mappings)}
         onClose={() => (showSequenceReplacer = false)}
       />
     {/if}
   </div>
 
-  <!-- Status Bar Footer -->
   <footer class="status-footer">
     <div class="status-bar-window">
-      <StatusBar statusFields={[{ text: statusMessage }]} />
+      <StatusBar statusFields={[{ text: fwState.statusMessage }]} />
     </div>
   </footer>
 
-  <!-- Warning Dialog -->
-  {#if showWarning}
+  {#if fwState.showWarning}
     <WarningWindow
-      title={warningTitle}
-      message={warningMessage}
-      onconfirm={() => (showWarning = false)}
+      title={fwState.warningTitle}
+      message={fwState.warningMessage}
+      onconfirm={() => (fwState.showWarning = false)}
       showCancel={false}
     />
   {/if}
 
-  <!-- Font Debug Window -->
-  {#if showFontDebug}
+  {#if fwState.showFontDebug}
     <FontDebugWindow
-      fileName={fontDebugFileName}
-      message={fontDebugMessage}
-      debugImages={fontDebugImages}
-      onclose={() => (showFontDebug = false)}
+      fileName={fwState.fontDebugFileName}
+      message={fwState.fontDebugMessage}
+      debugImages={fwState.fontDebugImages}
+      onclose={() => (fwState.showFontDebug = false)}
     />
   {/if}
 
-  <!-- Tofu Debug Window -->
-  {#if showTofuDebug}
+  {#if fwState.showTofuDebug}
     <TofuDebugWindow
-      debugData={tofuDebugData}
-      showConfirm={pendingReplacement !== null}
-      onclose={() =>
-        pendingReplacement ? cancelFontReplacement() : (showTofuDebug = false)}
-      onconfirm={() => confirmFontReplacement()}
+      debugData={fwState.tofuDebugData}
+      showConfirm={fwState.pendingReplacement !== null}
+      onclose={() => fwState.pendingReplacement ? fwState.cancelFontReplacement() : (fwState.showTofuDebug = false)}
+      onconfirm={() => fwState.confirmFontReplacement()}
     />
   {/if}
 
-  <!-- Font Size Confirmation Dialog -->
-  {#if showFontSizeConfirmation && pendingFontConfirmation}
+  {#if fwState.showFontSizeConfirmation && fwState.pendingFontConfirmation}
     <FontSizeConfirmationWindow
-      fileName={pendingFontConfirmation.fileName}
-      debugImages={pendingFontConfirmation.debugImages}
-      oncancel={handleFontSizeCancel}
-      onconfirm={handleFontSizeConfirm}
+      fileName={fwState.pendingFontConfirmation.fileName}
+      debugImages={fwState.pendingFontConfirmation.debugImages}
+      oncancel={() => fwState.handleFontSizeCancel()}
+      onconfirm={(type) => fwState.handleFontSizeConfirm(type)}
     />
   {/if}
 </div>

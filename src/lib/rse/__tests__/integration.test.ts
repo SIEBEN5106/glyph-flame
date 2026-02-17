@@ -9,6 +9,7 @@ import { FirmwareAnalyzer } from '../extractors/firmware-analyzer.js';
 import { FontExtractor } from '../extractors/font-extractor.js';
 import { ResourceExtractor } from '../extractors/resource-extractor.js';
 import { UNICODE_RANGES } from '../utils/unicode-ranges.js';
+import { decodeV8 } from '../utils/font-decoder.js';
 
 // Mock firmware data for testing
 function createMockFirmware(): Uint8Array {
@@ -221,7 +222,7 @@ describe('RSE Integration Tests', () => {
 			const chunk = new Uint8Array(32);
 			const lookupVal = 0x00; // Simple config
 
-			const pixels = extractor.decodeV8(chunk, lookupVal);
+			const pixels = decodeV8(chunk, lookupVal);
 
 			expect(pixels).toBeDefined();
 			expect(pixels.length).toBe(16); // 16 rows

@@ -100,11 +100,12 @@ describe('font-detection unit tests (via mocked canvas)', () => {
 		is16pxPixelPerfect: boolean
 	): FontDetectionResult {
 		let fontType: DetectedFontType = null;
+		let isUncertain = false;
 
 		// Same logic as detectFontType function
-		// If both are pixel-perfect, prefer SMALL (more common for pixel fonts)
 		if (is12pxPixelPerfect && is16pxPixelPerfect) {
-			fontType = 'SMALL';
+			fontType = 'UNCERTAIN';
+			isUncertain = true;
 		}
 		// Classify as SMALL if only 12px rendering produces only black/white pixels
 		else if (is12pxPixelPerfect) {
@@ -119,6 +120,7 @@ describe('font-detection unit tests (via mocked canvas)', () => {
 		return {
 			fontType,
 			isPixelPerfect: is12pxPixelPerfect || is16pxPixelPerfect,
+			isUncertain,
 			antiAliasedCount12px,
 			antiAliasedCount16px
 		};
@@ -133,10 +135,11 @@ describe('font-detection unit tests (via mocked canvas)', () => {
 			expect(result.antiAliasedCount12px).toBe(0);
 		});
 
-		it('should classify font as SMALL when both 12px and 16px are pixel-perfect (prefer SMALL)', () => {
+		it('should classify font as UNCERTAIN when both 12px and 16px are pixel-perfect', () => {
 			const result = simulateFontDetection(true, true);
 
-			expect(result.fontType).toBe('SMALL');
+			expect(result.fontType).toBe('UNCERTAIN');
+			expect(result.isUncertain).toBe(true);
 			expect(result.isPixelPerfect).toBe(true);
 		});
 	});
@@ -176,6 +179,7 @@ describe('FontDetectionResult type', () => {
 		const result: FontDetectionResult = {
 			fontType: 'SMALL',
 			isPixelPerfect: true,
+			isUncertain: false,
 			antiAliasedCount12px: 0,
 			antiAliasedCount16px: 150
 		};
@@ -190,6 +194,7 @@ describe('FontDetectionResult type', () => {
 		const result: FontDetectionResult = {
 			fontType: 'LARGE',
 			isPixelPerfect: true,
+			isUncertain: false,
 			antiAliasedCount12px: 100,
 			antiAliasedCount16px: 0
 		};
@@ -202,6 +207,7 @@ describe('FontDetectionResult type', () => {
 		const result: FontDetectionResult = {
 			fontType: null,
 			isPixelPerfect: false,
+			isUncertain: false,
 			antiAliasedCount12px: 200,
 			antiAliasedCount16px: 300
 		};
@@ -275,7 +281,7 @@ describe('anti-aliasing detection logic', () => {
 		const pixels = new Uint8ClampedArray([
 			// Pixel 1: Red (255, 0, 0) - not grayscale, not counted
 			255, 0, 0, 255,
-			// Pixel 2: Green (0, 255, 0) - not grayscale, not counted
+			// Pixel  green (0, 255, 0) - not grayscale, not counted
 			0, 255, 0, 255,
 			// Pixel 3: Gray (128, 128, 128) - grayscale, counted
 			128, 128, 128, 255
@@ -373,9 +379,9 @@ describe('font type classification decision tree', () => {
 	): DetectedFontType {
 		let fontType: DetectedFontType = null;
 
-		// If both are pixel-perfect, prefer SMALL (more common for pixel fonts)
+		// If both are pixel-perfect, we cannot determine automatically
 		if (is12pxPerfect && is16pxPerfect) {
-			fontType = 'SMALL';
+			fontType = 'UNCERTAIN';
 		}
 		// Classify as SMALL if only 12px rendering produces only black/white pixels
 		else if (is12pxPerfect) {
@@ -390,9 +396,11 @@ describe('font type classification decision tree', () => {
 		return fontType;
 	}
 
-	it('should return SMALL when 12px is perfect (regardless of 16px)', () => {
-		// First condition takes priority
-		expect(classifyFontType(true, true)).toBe('SMALL');
+	it('should return UNCERTAIN when both are perfect', () => {
+		expect(classifyFontType(true, true)).toBe('UNCERTAIN');
+	});
+
+	it('should return SMALL when only 12px is perfect', () => {
 		expect(classifyFontType(true, false)).toBe('SMALL');
 	});
 

@@ -51,16 +51,16 @@ function createTestFirmware(): Uint8Array {
 	];
 
 	// Encode the pattern using the v8 algorithm (with lookupVal = 0x00)
-	const pixels: PixelData = [];
+	const pixels: boolean[][] = [];
 	for (let y = 0; y < 16; y++) {
 		const row: boolean[] = [];
 		for (let x = 0; x < 16; x++) {
 			row.push(aPattern[y * 16 + x] === 1);
 		}
-		(pixels as boolean[][]).push(row);
+		pixels.push(row);
 	}
 
-	const encoded = encodeV8(pixels, 0x00);
+	const encoded = encodeV8(pixels as any as PixelData, 0x00);
 	data.set(encoded, smallFontOffset);
 
 	// Set up partition table at 0x14c
@@ -349,7 +349,7 @@ describe('FontExtractor Overwrite Tests', () => {
 		});
 
 		it('should reject invalid pixel dimensions', () => {
-			const invalidPixels: PixelData = [];
+			const invalidPixels: boolean[][] = [];
 			for (let y = 0; y < 10; y++) {
 				// Wrong: 10 rows instead of 12 for SMALL fonts
 				const row: boolean[] = [];
@@ -359,7 +359,7 @@ describe('FontExtractor Overwrite Tests', () => {
 				invalidPixels.push(row);
 			}
 
-			const result = extractor.replaceFontFromPixels(0x0041, 'SMALL', invalidPixels);
+			const result = extractor.replaceFontFromPixels(0x0041, 'SMALL', invalidPixels as any as PixelData);
 			expect(result).toBe(false);
 		});
 	});
