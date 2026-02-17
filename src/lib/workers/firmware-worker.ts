@@ -12,15 +12,173 @@ import {
   sliceSmallFontPixels,
 } from "../rse/utils/font-decoder";
 import { type PixelData } from "../rse/types";
-import { validateBitmapData } from "../rse/utils/font-encoder";
-import { buildBitmapListFromMetadata } from "../rse/utils/metadata.js";
+import { validateBitmapData, encodeV8 } from "../rse/utils/font-encoder";
+import { buildBitmapListFromMetadata } from "../rse/utils/metadata";
 import { convertToBmp, isValidFontData } from "../rse/utils/bitmap";
+import { TOFU_PADDING } from "../rse/utils/glyph-renderer";
+import { TofuDetector } from "../rse/utils/tofu-detection";
 
 // Constants
 const SMALL_STRIDE = 32;
 const LARGE_STRIDE = 33;
 const INVALID_VALUES = new Set([0x00, 0xff]);
 const FOOTER_SIGNATURES = new Set([0x90, 0x8f, 0x89, 0x8b, 0x8d, 0x8e, 0x8c]);
+
+/**
+ * Result of font address calculation
+ */
+interface FontAddressInfo {
+  /** Firmware address for font data */
+  addr: number;
+  /** Stride size (32 for SMALL, 33 for LARGE) */
+  stride: number;
+  /** Whether the code point is valid for the font type */
+  valid: boolean;
+  /** Reason for invalidity if not valid */
+  invalidReason?: string;
+}
+
+/**
+ * Calculate firmware address for a font glyph
+ * Uses global detected addresses (SMALL_BASE, LARGE_BASE, LOOKUP_TABLE)
+ * Shared helper used by replaceFonts and replaceFontsWorker handlers
+ *
+ * @param unicode - Unicode code point
+ * @param fontType - "SMALL" or "LARGE"
+ * @param SMALL_BASE - Detected SMALL font base address (global)
+ * @param LARGE_BASE - Detected LARGE font base address (global)
+ * @returns FontAddressInfo with address, stride, and validity
+ */
+function getFontAddress(
+  unicode: number,
+  fontType: "SMALL" | "LARGE",
+  SMALL_BASE: number,
+  LARGE_BASE: number,
+): FontAddressInfo {
+  if (fontType === "SMALL") {
+    if (unicode > 0xffff) {
+      return { addr: 0, stride: SMALL_STRIDE, valid: false, invalidReason: "unicode_out_of_range" };
+    }
+    return {
+      addr: SMALL_BASE + unicode * SMALL_STRIDE,
+      stride: SMALL_STRIDE,
+      valid: true,
+    };
+  } else {
+    // LARGE fonts cover CJK range 0x4E00-0x9FFF
+    if (unicode > 0xffff) {
+      return { addr: 0, stride: LARGE_STRIDE, valid: false, invalidReason: "not_in_cjk_range" };
+    }
+    return {
+      addr: LARGE_BASE + (unicode - 0x4e00) * LARGE_STRIDE,
+      stride: LARGE_STRIDE,
+      valid: true,
+    };
+  }
+}
+
+/**
+ * Get lookup table value for a Unicode code point
+ * Uses global detected LOOKUP_TABLE address
+ *
+ * @param unicode - Unicode code point
+ * @param firmwareData - Firmware data array
+ * @param LOOKUP_TABLE - Detected lookup table address (global)
+ * @returns Lookup value byte
+ */
+function getLookupValue(unicode: number, firmwareData: Uint8Array, LOOKUP_TABLE: number): number {
+  return firmwareData[LOOKUP_TABLE + (unicode >> 3)];
+}
+
+/**
+ * Result of font write operation
+ */
+interface FontWriteResult {
+  /** Whether the write was successful */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * Write encoded font data to firmware, preserving footer/bytes that must not change
+ * Handles both SMALL (32 bytes, preserve bytes 24-31) and LARGE (33 bytes, preserve footer) fonts
+ *
+ * @param firmwareData - Firmware data to write to
+ * @param encoded - Encoded font data (32 bytes for SMALL, 33 bytes for LARGE)
+ * @param addrInfo - Font address info containing address and stride
+ * @param unicode - Unicode code point (needed for verification lookup value)
+ * @returns FontWriteResult with success status and any error message
+ */
+function writeEncodedFont(
+  firmwareData: Uint8Array,
+  encoded: Uint8Array,
+  addrInfo: FontAddressInfo,
+  unicode: number,
+): FontWriteResult {
+  // Determine font type from stride (LARGE = 33, SMALL = 32)
+  const isLarge = addrInfo.stride === LARGE_STRIDE;
+
+  if (isLarge) {
+    // LARGE fonts: preserve footer byte
+    const footer = firmwareData[addrInfo.addr + addrInfo.stride - 1];
+    encoded[addrInfo.stride - 1] = footer;
+  } else {
+    // SMALL fonts: preserve original bottom 4 rows (bytes 24-31)
+    // This is critical - don't overwrite them with zeros!
+    const originalData = firmwareData.slice(
+      addrInfo.addr,
+      addrInfo.addr + addrInfo.stride,
+    );
+    // Copy bytes 24-31 (bottom 4 rows) from original to preserve them
+    encoded.set(originalData.slice(24), 24);
+  }
+
+  // Write encoded data to firmware
+  firmwareData.set(encoded, addrInfo.addr);
+
+  // Verify: read back and compare with original pixels
+  const firmwareChunk = firmwareData.slice(addrInfo.addr, addrInfo.addr + addrInfo.stride);
+
+  // Get lookup value using the unicode
+  const lookupVal = getLookupValue(unicode, firmwareData, LOOKUP_TABLE);
+
+  // Decode what we just wrote - returns 16x16 pixels
+  const decodedPixels = decodeV8(firmwareChunk, lookupVal);
+
+  // Decode original firmware data for comparison (before write)
+  const originalChunk = firmwareData.slice(addrInfo.addr, addrInfo.addr + addrInfo.stride);
+  const originalPixels = decodeV8(originalChunk, lookupVal);
+
+  // Compare decoded pixels with original pixels
+  // SMALL: compare top-left 12x12 area
+  // LARGE: compare full 16x16 area
+  const compareSize = isLarge ? 16 : 12;
+  for (let y = 0; y < compareSize; y++) {
+    for (let x = 0; x < compareSize; x++) {
+      if (decodedPixels[y][x] !== originalPixels[y][x]) {
+        return { success: false };
+      }
+    }
+  }
+
+  // Verify footer/bytes outside glyph box are preserved
+  if (isLarge) {
+    // LARGE: footer byte should be preserved
+    if (firmwareChunk[addrInfo.stride - 1] !== originalChunk[addrInfo.stride - 1]) {
+      return { success: false };
+    }
+  } else {
+    // SMALL: bottom 4 rows (bytes 24-31) should be preserved
+    for (let i = 24; i < addrInfo.stride; i++) {
+      if (firmwareChunk[i] !== originalChunk[i]) {
+        return { success: false };
+      }
+    }
+  }
+
+  return { success: true };
+}
 
 // Worker message types
 interface WorkerRequest {
@@ -33,7 +191,9 @@ interface WorkerRequest {
     | "replaceImage"
     | "replaceImages"
     | "getFirmware"
-    | "bundleImagesAsZip";
+    | "bundleImagesAsZip"
+    | "replaceFontsWorker" // Complete font replacement in worker
+    | "analyzeFonts"; // Analyze font with tofu detection
   id: string;
   firmware: Uint8Array;
   fontType?: "SMALL" | "LARGE";
@@ -53,6 +213,11 @@ interface WorkerRequest {
     offset: number;
     rgb565Data: Uint8Array;
   }>;
+  // Worker-based font extraction/replacement fields
+  fontData?: ArrayBuffer; // Font file data for worker to load
+  fontFamily?: string; // Font family name to use
+  fontSize?: 12 | 16; // Font size
+  codePoints?: number[]; // Code points to extract
 }
 
 interface FontPlaneInfo {
@@ -108,6 +273,16 @@ interface ReplaceImagesResult {
   }>;
 }
 
+interface ReplaceFontsResult {
+  successCount: number;
+  skippedCount: number;
+  errors: string[];
+  replacedCharacters: number[];
+  skippedCharacters: number[];
+  skippedReasons: Map<number, string>;
+  fontType: "SMALL" | "LARGE"; // Which font type was replaced
+}
+
 type WorkerResponse =
   | {
       type: "success";
@@ -119,9 +294,18 @@ type WorkerResponse =
         | ImageData
         | ReplaceImageResult
         | ReplaceImagesResult
+        | ReplaceFontsResult
         | Uint8Array;
     }
   | { type: "progress"; id: string; message: string }
+  | {
+      type: "progress";
+      id: string;
+      message: string;
+      queueDepth: number;
+      queueCapacity: number;
+    }
+  | { type: "queueReady"; id: string }
   | { type: "error"; id: string; error: string };
 
 // Firmware data cache
@@ -1046,6 +1230,359 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
           id,
           result: new Uint8Array(zipBlob),
         });
+        break;
+      }
+
+      // =========================================================================
+      // Analyze Fonts - Run tofu detection and return debug data
+      // Uses unified TofuDetector for consistent tofu detection
+      // =========================================================================
+
+      case "analyzeFonts": {
+        const {
+          fontData,
+          fontFamily,
+          fontSize = 12,
+          codePoints = [],
+        } = e.data as WorkerRequest & {
+          fontData?: ArrayBuffer;
+          fontFamily?: string;
+          fontSize?: 12 | 16;
+          codePoints?: number[];
+        };
+
+        if (!fontData || !fontFamily || codePoints.length === 0) {
+          self.postMessage({
+            type: "error",
+            id,
+            error: "Missing required parameters for analyzeFonts",
+          });
+          return;
+        }
+
+        try {
+          console.log("[analyzeFonts] Starting analysis:", { fontFamily, fontSize, codePointsCount: codePoints.length });
+
+          // Load fonts into worker's font set
+          const userFontFace = new FontFace(fontFamily, fontData);
+          await userFontFace.load();
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.add(userFontFace);
+          console.log("[analyzeFonts] User font loaded:", fontFamily);
+
+          // Load tofu font for fallback rendering
+          const tofuResponse = await fetch("/AND-Regular.ttf");
+          if (!tofuResponse.ok) {
+            throw new Error(`Failed to fetch tofu font: ${tofuResponse.statusText}`);
+          }
+          const tofuBuffer = await tofuResponse.arrayBuffer();
+          const tofuFontFace = new FontFace("Adobe-NotDef", tofuBuffer);
+          await tofuFontFace.load();
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.add(tofuFontFace);
+
+          // Wait for fonts to be ready
+          // @ts-ignore - fonts API exists in workers
+          await self.fonts.ready;
+          console.log("[analyzeFonts] All fonts ready");
+
+          // Create unified tofu detector
+          const tofuDetector = new TofuDetector();
+          const tofuSignature = await tofuDetector.generateSignature(fontSize as 12 | 16);
+
+          // Analyze all characters using unified detector
+          type AnalysisResult = {
+            codePoint: number;
+            char: string;
+            fontSize: number;
+            renderedPixels: boolean[][];
+            tofuPixels: boolean[][];
+            match: boolean;
+            matchPercentage: number;
+            boundingBox1: { x: number; y: number; width: number; height: number };
+            boundingBox2: { x: number; y: number; width: number; height: number };
+          };
+          const results: AnalysisResult[] = [];
+
+          for (let i = 0; i < codePoints.length; i++) {
+            const codePoint = codePoints[i];
+            const char = String.fromCodePoint(codePoint);
+
+            // Progress update
+            if (i % 50 === 0) {
+              self.postMessage({
+                type: "progress",
+                id,
+                message: `Analyzing character ${i + 1}/${codePoints.length}`,
+                progress: Math.round((i / codePoints.length) * 100),
+              });
+            }
+
+            // Use unified detector
+            const detection = await tofuDetector.detect(char, fontFamily, fontSize as 12 | 16);
+
+            // Extract rendered pattern for debug output
+            const patternSize = tofuSignature.patternSize;
+            const renderedPattern: boolean[][] = [];
+
+            if (detection.skippedRendering) {
+              // Glyph missing - tofu, renderPattern stays empty
+            } else {
+              for (let y = TOFU_PADDING; y < TOFU_PADDING + patternSize; y++) {
+                const row: boolean[] = [];
+                for (let x = TOFU_PADDING; x < TOFU_PADDING + patternSize; x++) {
+                  row.push(detection.renderedPixels[y]?.[x] ?? false);
+                }
+                renderedPattern.push(row);
+              }
+            }
+
+            // Bounding box for best match position
+            const bbox1 = detection.detectionResult.matchPosition
+              ? { x: detection.detectionResult.matchPosition.x, y: detection.detectionResult.matchPosition.y, width: patternSize, height: patternSize }
+              : { x: 0, y: 0, width: patternSize, height: patternSize };
+
+            results.push({
+              codePoint,
+              char,
+              fontSize,
+              renderedPixels: renderedPattern,
+              tofuPixels: tofuSignature.pixels,
+              match: detection.isTofu,
+              matchPercentage: detection.detectionResult.matchRatio * 100,
+              boundingBox1: bbox1,
+              boundingBox2: { x: 0, y: 0, width: 0, height: 0 },
+            });
+
+            // Yield periodically
+            if (i % 50 === 0) {
+              await new Promise((r) => setTimeout(r, 0));
+            }
+          }
+
+          console.log("[analyzeFonts] Analysis complete:", {
+            total: results.length,
+            tofuCount: results.filter((r) => r.match).length,
+          });
+
+          // Clean up fonts
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.delete(userFontFace);
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.delete(tofuFontFace);
+
+          // Convert to TofuDebugData format for main thread
+          const debugData = results.map((r) => ({
+            codePoint: r.codePoint,
+            char: r.char,
+            fontSize: r.fontSize,
+            renderedPixels: r.renderedPixels,
+            tofuPixels: r.tofuPixels,
+            match: r.match,
+            matchPercentage: r.matchPercentage,
+            tofuPixelCount: r.tofuPixels.flat().filter(Boolean).length,
+            charPixelCount: r.renderedPixels.flat().filter(Boolean).length,
+            boundingBox1: r.boundingBox1,
+            boundingBox2: r.boundingBox2,
+          }));
+
+          self.postMessage({
+            type: "success",
+            id,
+            result: {
+              success: true,
+              debugData,
+              tofuSignature: tofuSignature.pixels.map((row) => row.map((p) => (p ? 1 : 0))),
+              tofuPixelCount: tofuSignature.blackPixelCount,
+            },
+          });
+        } catch (error) {
+          console.error("[analyzeFonts] Error:", error);
+          self.postMessage({
+            type: "error",
+            id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        break;
+      }
+
+      // =========================================================================
+      // Complete Font Replacement in Worker
+      // Uses unified TofuDetector for consistent tofu detection
+      // =========================================================================
+
+      case "replaceFontsWorker": {
+        const {
+          fontData,
+          fontFamily,
+          fontSize = 12,
+          fontType = "SMALL",
+          firmware,
+          codePoints = []
+        } = e.data as WorkerRequest & {
+          fontData?: ArrayBuffer;
+          fontFamily?: string;
+          fontSize?: 12 | 16;
+          fontType?: "SMALL" | "LARGE";
+          firmware?: Uint8Array;
+          codePoints?: number[];
+        };
+
+        if (!fontData || !fontFamily || !firmware || codePoints.length === 0) {
+          self.postMessage({
+            type: "error",
+            id,
+            error: "Missing required parameters for replaceFontsWorker",
+          });
+          return;
+        }
+
+        try {
+          console.log("[replaceFontsWorker] Starting font replacement:", { fontFamily, fontSize, fontType, codePointsCount: codePoints.length });
+
+          // Load fonts into worker's font set
+          const userFontFace = new FontFace(fontFamily, fontData);
+          await userFontFace.load();
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.add(userFontFace);
+          console.log("[replaceFontsWorker] User font loaded:", fontFamily);
+
+          // Load tofu font for detection (fetch from server)
+          const tofuResponse = await fetch("/AND-Regular.ttf");
+          if (!tofuResponse.ok) {
+            throw new Error(`Failed to fetch tofu font: ${tofuResponse.status} ${tofuResponse.statusText}`);
+          }
+          const tofuBuffer = await tofuResponse.arrayBuffer();
+          const tofuFontFace = new FontFace("Adobe-NotDef", tofuBuffer);
+          await tofuFontFace.load();
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.add(tofuFontFace);
+
+          // Wait for fonts to be ready
+          // @ts-ignore - fonts API exists in workers
+          await self.fonts.ready;
+          console.log("[replaceFontsWorker] Fonts ready");
+
+          // Create unified tofu detector
+          const tofuDetector = new TofuDetector();
+          await tofuDetector.generateSignature(fontSize as 12 | 16);
+
+          // Set firmware data
+          firmwareData = firmware;
+
+          // Results tracking
+          const results = {
+            replacedCharacters: [] as number[],
+            successCount: 0,
+            skippedCharacters: [] as number[],
+            skippedReasons: {} as Record<number, string>,
+            errors: [] as string[],
+          };
+
+          // Process all characters using unified detector
+          for (let i = 0; i < codePoints.length; i++) {
+            const unicode = codePoints[i];
+            const char = String.fromCodePoint(unicode);
+
+            // Progress update
+            if (i % 100 === 0) {
+              self.postMessage({
+                type: "progress",
+                id,
+                message: `Processing U+${unicode.toString(16).toUpperCase().padStart(4, '0')} (${i + 1}/${codePoints.length})...`,
+                progress: Math.floor((i / codePoints.length) * 100),
+              });
+            }
+
+            // Use unified detector for tofu detection and glyph extraction
+            const detection = await tofuDetector.detect(char, fontFamily, fontSize as 12 | 16);
+
+            // If tofu detected, skip this character
+            if (detection.isTofu) {
+              results.skippedCharacters.push(unicode);
+              results.skippedReasons[unicode] = "tofu_detected";
+              continue;
+            }
+
+            // Extract glyph pixels for firmware
+            const pixels = tofuDetector.extractGlyph(detection.renderedPixels);
+
+            // Write to firmware using shared helper
+            const addrInfo = getFontAddress(unicode, fontType, SMALL_BASE, LARGE_BASE);
+            if (!addrInfo.valid) {
+              results.skippedCharacters.push(unicode);
+              results.skippedReasons[unicode] = "invalid_address";
+              continue;
+            }
+
+            if (addrInfo.addr + addrInfo.stride > firmwareData!.length) {
+              results.skippedCharacters.push(unicode);
+              results.skippedReasons[unicode] = "address_out_of_bounds";
+              continue;
+            }
+
+            // Encode and write
+            const lookupVal = getLookupValue(unicode, firmwareData!, LOOKUP_TABLE);
+            const encoded = encodeV8(pixels, lookupVal, fontType);
+
+            // Write to firmware using shared function
+            const writeResult = writeEncodedFont(firmwareData!, encoded, addrInfo, unicode);
+
+            if (!writeResult.success) {
+              results.errors.push(`Verification failed for U+${unicode.toString(16).toUpperCase()}`);
+              continue;
+            }
+
+            results.replacedCharacters.push(unicode);
+            results.successCount++;
+
+            // Yield periodically
+            if (i % 50 === 0) {
+              await new Promise((r) => setTimeout(r, 0));
+            }
+          }
+
+          // Clean up fonts
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.delete(userFontFace);
+          // @ts-ignore - fonts API exists in workers
+          self.fonts.delete(tofuFontFace);
+
+          // Return final firmware
+          const resultFirmware = firmwareData!.slice(0);
+
+          console.log("[replaceFontsWorker] Sending success result:", {
+            successCount: results.successCount,
+            skippedCount: results.skippedCharacters.length,
+            skippedReasons: results.skippedReasons,
+            firmwareLength: resultFirmware.length,
+          });
+
+          self.postMessage({
+            type: "success",
+            id,
+            result: {
+              successCount: results.successCount,
+              skippedCharacters: results.skippedCharacters,
+              skippedReasons: results.skippedReasons,
+              errors: results.errors,
+              replacedCharacters: results.replacedCharacters,
+              firmware: resultFirmware,
+              fontType,
+            },
+          });
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          const errorStack = err instanceof Error ? err.stack : "";
+          console.error("[replaceFontsWorker] Error:", errorMsg, errorStack);
+          self.postMessage({
+            type: "error",
+            id,
+            error: `Font replacement failed: ${errorMsg}`,
+            details: errorStack,
+          });
+        }
         break;
       }
 

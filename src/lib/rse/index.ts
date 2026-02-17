@@ -14,6 +14,11 @@ export * from './utils/struct.js';
 export * from './utils/bytes.js';
 export * from './utils/bitmap.js';
 export * from './utils/unicode-ranges.js';
+export * from './utils/tofu-font.js';
+export * from './utils/font-extraction.js';
+export * from './utils/font-detection.js';
+export * from './utils/font-loading.js';
+export * from './utils/font-glyph-checker.js';
 
 // Extractors
 export { FirmwareAnalyzer } from './extractors/firmware-analyzer.js';

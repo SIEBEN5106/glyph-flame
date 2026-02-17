@@ -33,34 +33,48 @@ export function parseLookupConfig(lookupVal: number): FontEncodingConfig {
 
 /**
  * Encode pixel data to font chunk using v8 algorithm (inverse of decodeV8)
- * @param pixels - 2D pixel array (16 rows, each with 16 bits)
+ * @param pixels - 2D pixel array (12 or 16 rows, each with 12 or 16 bits)
  * @param lookupVal - Lookup table value for encoding configuration
+ * @param fontType - Font type to determine output size ("SMALL" or "LARGE")
  * @returns Encoded font data chunk (32 bytes for SMALL, 33 bytes for LARGE)
  * @throws Error if pixel data is invalid
  */
-export function encodeV8(pixels: PixelData, lookupVal: number): Uint8Array {
-	// Validate pixel data
-	if (pixels.length !== 16) {
-		throw new Error(`Invalid pixel data: expected 16 rows, got ${pixels.length}`);
+export function encodeV8(
+	pixels: PixelData,
+	lookupVal: number,
+	fontType: "SMALL" | "LARGE" = "SMALL",
+): Uint8Array {
+	// Determine font size from pixel dimensions
+	const height = pixels.length;
+	const width = pixels[0]?.length || 0;
+
+	// Validate pixel data - support both 12x12 and 16x16
+	if (height !== 12 && height !== 16) {
+		throw new Error(`Invalid pixel data: expected 12 or 16 rows, got ${height}`);
 	}
 
 	for (let i = 0; i < pixels.length; i++) {
-		if (pixels[i].length !== 16) {
-			throw new Error(`Invalid pixel data: expected 16 pixels per row, got ${pixels[i].length} in row ${i}`);
+		if (pixels[i].length !== width) {
+			throw new Error(`Invalid pixel data: expected ${width} pixels per row, got ${pixels[i].length} in row ${i}`);
 		}
 	}
+
+	// Calculate stride based on font type
+	// SMALL: 32 bytes (16 rows × 2 bytes)
+	// LARGE: 33 bytes (16 rows × 2 bytes + 1 padding byte)
+	const stride = fontType === "SMALL" ? 32 : 33;
 
 	const config = parseLookupConfig(lookupVal);
 	const { swMcuBits, swMcuHwSwap, swMcuByteSwap } = config;
 
 	// Encode each row to 2 bytes (16 bits)
-	const chunk = new Uint8Array(32);
+	const chunk = new Uint8Array(stride);
 
-	for (let row = 0; row < 16; row++) {
-		// Convert 16 pixels to a 16-bit value (bits 15-0)
+	for (let row = 0; row < height; row++) {
+		// Convert pixels to a 16-bit value (bits 15-0)
 		// decodeV8 extracts bits 15-0, so we put our data there
 		let pixelValue = 0;
-		for (let bit = 0; bit < 16; bit++) {
+		for (let bit = 0; bit < width; bit++) {
 			if (pixels[row][bit]) {
 				pixelValue |= (1 << (15 - bit));
 			}

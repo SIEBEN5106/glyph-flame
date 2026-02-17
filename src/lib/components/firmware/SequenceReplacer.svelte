@@ -541,7 +541,7 @@
 </div>
 
 {#if isExtracting}
-  <LoadingWindow message="Extracting frames from video..." progress={extractProgress} showProgress={true} />
+  <LoadingWindow message="Extracting frames from video..." progress={extractProgress} showProgress={true} showClose={false} />
 {/if}
 
 <style>
