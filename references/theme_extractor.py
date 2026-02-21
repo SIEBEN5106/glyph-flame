@@ -3393,8 +3393,55 @@ class ThemeColorAnalyzer:
 
 
 # ============================================================================
-# Patch Detection
+# Patch Detection (uses dynamic discovery, no hardcoded addresses)
 # ============================================================================
+
+
+def _is_movw_instruction(data: bytes, addr: int) -> bool:
+    """Check if instruction at addr is a MOVW (32-bit Thumb instruction)"""
+    if addr + 4 > len(data):
+        return False
+    hw = data[addr] | (data[addr + 1] << 8)
+    # MOVW: first halfword starts with 11110 i 100100 (0xF2xx or 0xF6xx)
+    return (hw & 0xFB00) == 0xF200
+
+
+def _discover_flac_patch_point(data: bytes, search_start: int = 0x80000, search_end: int = 0x100000) -> Optional[int]:
+    """Discover FLAC patch point by searching for CMP+ITE pattern
+
+    Returns the first CMP+ITE pattern found. Note: if firmware is already patched,
+    this pattern will be replaced with BL instruction, so function returns None.
+    Use PatchDetector to check for existing patches.
+    """
+    for addr in range(search_start, min(search_end, len(data) - 4), 2):
+        if data[addr:addr+2] == bytes.fromhex('0429'):  # CMP R1,#4
+            if data[addr+2:addr+4] == bytes.fromhex('0CBF'):  # ITE EQ
+                return addr
+    return None
+
+
+def _discover_menu_patch_point(data: bytes, search_start: int = 0x30000, search_end: int = 0x50000) -> Optional[int]:
+    """Discover Menu patch point by searching for MOV.W R12, #0 followed by MOVW instructions
+
+    The theme menu function has the signature: MOV.W R12, #0 followed by MOVW instructions
+    that load theme color addresses. We distinguish it from other functions by checking
+    for the MOVW pattern.
+
+    Returns the patch point address, or None if not found.
+    """
+    for addr in range(search_start, min(search_end, len(data) - 20), 2):
+        if data[addr:addr+4] == bytes.fromhex('4FF0000C'):  # MOV.W R12, #0
+            # Check for MOVW instructions in the next few instructions
+            has_movw = False
+            for check_offset in (4, 6, 8, 10, 12):
+                check_addr = addr + check_offset
+                if _is_movw_instruction(data, check_addr):
+                    has_movw = True
+                    break
+
+            if has_movw:
+                return addr
+    return None
 
 
 class PatchDetector:
@@ -3413,7 +3460,7 @@ class PatchDetector:
 
     def detect_patch(self, theme_functions: List['ThemeFunction']) -> PatchInfo:
         """
-        Detect if firmware has been patched
+        Detect if firmware has been patched using dynamic discovery
 
         Returns PatchInfo with detection results
         """
@@ -3422,7 +3469,7 @@ class PatchDetector:
         flac_funcs = [f for f in theme_functions if f.ui_element and 'FLAC' in f.ui_element]
         menu_funcs = [f for f in theme_functions if f.ui_element and 'Menu' in f.ui_element]
 
-        # Check FLAC functions
+        # Check FLAC functions from detected list
         for func in flac_funcs:
             is_patched, target = self._check_flac_patched(func.addr)
             if is_patched:
@@ -3430,7 +3477,7 @@ class PatchDetector:
                 info.patch_target_addr = target
                 break
 
-        # Check Menu functions
+        # Check Menu functions from detected list
         for func in menu_funcs:
             is_patched, target = self._check_menu_patched(func.addr)
             if is_patched:
@@ -3438,6 +3485,24 @@ class PatchDetector:
                 if not info.patch_target_addr:
                     info.patch_target_addr = target
                 break
+
+        # Fallback: Use dynamic discovery to find patch points
+        if not info.flac_patched:
+            flac_patch_point = _discover_flac_patch_point(self.data)
+            if flac_patch_point:
+                is_patched, target = self._check_flac_patched_by_addr(flac_patch_point)
+                if is_patched:
+                    info.flac_patched = True
+                    info.patch_target_addr = target
+
+        if not info.menu_patched:
+            menu_patch_point = _discover_menu_patch_point(self.data)
+            if menu_patch_point:
+                is_patched, target = self._check_menu_patched_by_addr(menu_patch_point)
+                if is_patched:
+                    info.menu_patched = True
+                    if not info.patch_target_addr:
+                        info.patch_target_addr = target
 
         # Check NOP region for code
         info.nop_has_code = self._check_nop_region_for_code()
@@ -3467,45 +3532,77 @@ class PatchDetector:
 
         return info
 
+    def _check_flac_patched_by_addr(self, patch_addr: int) -> Tuple[bool, int]:
+        """Check if FLAC patch point has been modified"""
+        if patch_addr + 4 > len(self.data):
+            return False, 0
+
+        current_bytes = self.data[patch_addr:patch_addr + 4]
+
+        if current_bytes == self.FLAC_ORIGINAL:
+            return False, 0
+
+        if self._is_bl_instruction(patch_addr):
+            target = self._decode_bl_target(patch_addr)
+            if 0x100000 < target < 0x2000000:
+                return True, target
+
+        return False, 0
+
+    def _check_menu_patched_by_addr(self, patch_addr: int) -> Tuple[bool, int]:
+        """Check if Menu patch point has been modified"""
+        if patch_addr + 4 > len(self.data):
+            return False, 0
+
+        current_bytes = self.data[patch_addr:patch_addr + 4]
+
+        if current_bytes == self.MENU_ORIGINAL:
+            return False, 0
+
+        if self._is_bl_instruction(patch_addr):
+            target = self._decode_bl_target(patch_addr)
+            if 0x100000 < target < 0x2000000:
+                return True, target
+
+        return False, 0
+
     def _check_flac_patched(self, func_addr: int) -> Tuple[bool, int]:
-        """Check if FLAC function is patched"""
-        # Find CMP+ITE pattern
+        """Check if FLAC function is patched by scanning near function start"""
+        # Scan for BL instruction within function (patched) or original pattern
         for offset in range(0, 500, 2):
             addr = func_addr + offset
             if addr + 4 > len(self.data):
                 break
 
-            if self.data[addr:addr+2] == bytes.fromhex('0429'):  # CMP R1,#4
-                if self.data[addr+2:addr+4] == bytes.fromhex('0CBF'):  # ITE EQ
-                    # Found the pattern, check what's there now
-                    current = self.data[addr:addr+4]
-                    if current == self.FLAC_ORIGINAL:
-                        return False, 0
-                    elif self._is_bl_instruction(addr):
-                        # Decode BL target
-                        target = self._decode_bl_target(addr)
-                        return True, target
-                    return False, 0
+            # Check for original pattern first
+            if self.data[addr:addr+4] == self.FLAC_ORIGINAL:
+                return False, 0
+
+            # Check for BL instruction (patched)
+            if self._is_bl_instruction(addr):
+                target = self._decode_bl_target(addr)
+                if 0x100000 < target < 0x2000000:
+                    return True, target
 
         return False, 0
 
     def _check_menu_patched(self, func_addr: int) -> Tuple[bool, int]:
-        """Check if Menu function is patched"""
-        # Find MOV.W R12, #0 pattern
+        """Check if Menu function is patched by scanning near function start"""
+        # Scan for BL instruction within function (patched) or original pattern
         for offset in range(0, 200, 2):
             addr = func_addr + offset
             if addr + 4 > len(self.data):
                 break
 
+            # Check for original pattern first
             if self.data[addr:addr+4] == self.MENU_ORIGINAL:
-                # Found original, check what's there now
-                current = self.data[addr:addr+4]
-                if current == self.MENU_ORIGINAL:
-                    return False, 0
-                elif self._is_bl_instruction(addr):
-                    target = self._decode_bl_target(addr)
-                    return True, target
                 return False, 0
+
+            # Check for BL instruction (patched)
+            if self._is_bl_instruction(addr):
+                target = self._decode_bl_target(addr)
+                if 0x100000 < target < 0x2000000:
+                    return True, target
 
         return False, 0
 

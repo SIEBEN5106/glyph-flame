@@ -26,6 +26,9 @@ export { FontExtractor } from './extractors/font-extractor.js';
 export { ResourceExtractor } from './extractors/resource-extractor.js';
 export { BatchProcessor } from './extractors/batch-processor.js';
 
+// Theme module (color extraction and patching)
+export * from './theme/index.js';
+
 // Re-export commonly used types
 export type {
 	BitmapMetadata,
