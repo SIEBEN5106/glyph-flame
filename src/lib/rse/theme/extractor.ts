@@ -8,7 +8,8 @@
 import { ThumbDecoder } from './thumb/index.js';
 import { ThemeDiscovery } from './discovery.js';
 import { ControlFlowSimulator } from './simulator.js';
-import { createColorMap, type ThemeFunction, type AnalysisResult, type FlacBehavior, type ThemeColorMap } from './types.js';
+import { BehaviorAnalyzer } from './behavior.js';
+import { createColorMap, type ThemeFunction, type AnalysisResult, type FlacBehavior } from './types.js';
 import {
 	ThemeError,
 	NotFoundError,
@@ -24,6 +25,7 @@ import {
 export class ThemeColorExtractor {
 	private readonly decoder: ThumbDecoder;
 	private readonly discovery: ThemeDiscovery;
+	private readonly behaviorAnalyzer: BehaviorAnalyzer;
 
 	/**
 	 * Create a new ThemeColorExtractor
@@ -31,6 +33,7 @@ export class ThemeColorExtractor {
 	constructor(firmwareData: Uint8Array) {
 		this.decoder = new ThumbDecoder(firmwareData);
 		this.discovery = new ThemeDiscovery(this.decoder);
+		this.behaviorAnalyzer = new BehaviorAnalyzer(this.decoder);
 	}
 
 	/**
@@ -73,8 +76,8 @@ export class ThemeColorExtractor {
 				}
 			}
 
-			// Determine FLAC behavior
-			const flacBehavior = this.analyzeFlacBehavior(functions, mergedColors);
+			// Determine FLAC behavior using behavior analysis
+			const flacBehavior = this.analyzeFlacBehavior(functions);
 
 			return {
 				version: 'Unknown',
@@ -89,23 +92,26 @@ export class ThemeColorExtractor {
 	}
 
 	/**
-	 * Analyze FLAC behavior from discovered functions and colors
+	 * Analyze FLAC behavior using behavior analyzer
 	 */
-	private analyzeFlacBehavior(functions: ThemeFunction[], colors: ThemeColorMap): FlacBehavior {
+	private analyzeFlacBehavior(functions: ThemeFunction[]): FlacBehavior {
 		const flacFunc = functions.find(f => f.type === 'flac');
 
 		if (!flacFunc) {
-			return { type: 'unknown' };
+			return {
+				type: 'unknown',
+				isFlac: false,
+				colorFor4: 0,
+				colorForOther: 0,
+				movwAddr4: '',
+				movwInstr4: '',
+				movwAddrOther: '',
+				movwInstrOther: ''
+			};
 		}
 
-		// Check if we have color writes in R4-R8 (FLAC registers)
-		const flacColors = [4, 5, 6, 7, 8].filter(r => colors.has(r));
-
-		if (flacColors.length === 0) {
-			return { type: 'unknown' };
-		}
-
-		return { type: 'standard' };
+		// Use behavior analyzer for detailed analysis
+		return this.behaviorAnalyzer.analyzeFlacFunction(flacFunc.addr, 100);
 	}
 
 	/**

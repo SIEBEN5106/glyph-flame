@@ -72,34 +72,46 @@ export class NopSlideFinder {
 		}> = [];
 
 		for (const slide of slides) {
-			if (slide.size < requiredSize) continue;
+			// Enforce 4-byte alignment for BL targets (ARM Thumb2 requirement)
+			const alignedStart = (slide.start + 3) & ~3;
+			const adjustedSize = slide.end - alignedStart;
 
-			// Check BL range (±16MB)
-			const distances = funcAddrs.map((f) => Math.abs(slide.start - f));
+			if (adjustedSize < requiredSize) continue;
+
+			// Check distance to theme functions
+			const distances = funcAddrs.map((f) => Math.abs(alignedStart - f));
 			const maxDistance = distances.length > 0 ? Math.max(...distances) : 0;
 
+			// Must be within BL range (±16MB)
 			if (maxDistance > 16777216) continue;
 
 			candidates.push({
-				slide,
-				utilization: requiredSize / slide.size,
+				slide: {
+					...slide,
+					start: alignedStart,
+					end: alignedStart + requiredSize,
+					size: requiredSize,
+					source: 'selected'
+				},
+				utilization: requiredSize / adjustedSize,
 				maxDistance
 			});
 		}
 
 		if (candidates.length === 0) return null;
 
-		// Sort by utilization (prefer well-utilized slides) then by distance (prefer closer)
+		// Sort by: closest to 100% utilization, then by distance
 		candidates.sort((a, b) => {
 			const utilDiff = Math.abs(1 - a.utilization) - Math.abs(1 - b.utilization);
 			if (utilDiff !== 0) return utilDiff;
 			return a.maxDistance - b.maxDistance;
 		});
 
+		// Return a copy with updated source
 		const best = candidates[0].slide;
 		return {
 			...best,
-			source: 'selected'
+			source: 'selected' as const
 		};
 	}
 

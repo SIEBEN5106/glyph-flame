@@ -34,6 +34,16 @@ const FLAC_SIGNATURE = new Uint8Array([0x04, 0x29, 0x0c, 0xbf]); // CMP R1,#4 + 
 const MENU_SIGNATURE = new Uint8Array([0x4f, 0xf0, 0x00, 0x0c]); // MOV.W R12, #0
 
 /**
+ * Check if instruction at addr is a MOVW (32-bit Thumb instruction)
+ * MOVW: first halfword starts with 11110 i 100100 (0xF2xx or 0xF6xx)
+ */
+function isMovwInstruction(data: Uint8Array, addr: number): boolean {
+	if (addr + 4 > data.length) return false;
+	const hw = data[addr] | (data[addr + 1] << 8);
+	return (hw & 0xfb00) === 0xf200;
+}
+
+/**
  * Discover theme count by analyzing CMP patterns in firmware
  */
 export function discoverThemeCount(data: Uint8Array): [number, string[]] {
@@ -163,14 +173,18 @@ export class ThemeDiscovery {
 	}
 
 	/**
-	 * Detect Menu function by searching for MOV.W R12,#0 pattern
+	 * Detect Menu function by searching for MOV.W R12,#0 pattern followed by MOVW instructions
+	 *
+	 * The theme menu function has the signature: MOV.W R12, #0 followed by MOVW instructions
+	 * that load theme color addresses. We distinguish it from other functions by checking
+	 * for the MOVW pattern.
 	 */
 	static detectMenuFunction(
 		data: Uint8Array,
 		searchStart = 0x30000,
 		searchEnd = 0x50000
 	): [number, number] | null {
-		const actualEnd = Math.min(searchEnd, data.length - 4);
+		const actualEnd = Math.min(searchEnd, data.length - 20); // Need space for MOVW check
 
 		for (let addr = searchStart; addr < actualEnd; addr += 2) {
 			// Check for MOV.W R12, #0 pattern
@@ -178,7 +192,19 @@ export class ThemeDiscovery {
 				data[addr + 1] === MENU_SIGNATURE[1] &&
 				data[addr + 2] === MENU_SIGNATURE[2] &&
 				data[addr + 3] === MENU_SIGNATURE[3]) {
-				return [addr, addr];
+				// Check for MOVW instructions in the next few instructions
+				let hasMovw = false;
+				for (const checkOffset of [4, 6, 8, 10, 12]) {
+					const checkAddr = addr + checkOffset;
+					if (isMovwInstruction(data, checkAddr)) {
+						hasMovw = true;
+						break;
+					}
+				}
+
+				if (hasMovw) {
+					return [addr, addr];
+				}
 			}
 		}
 

@@ -30,7 +30,7 @@ export class ThumbEncodingError extends Error {
  * Where I1 = NOT(J1 XOR S), I2 = NOT(J2 XOR S)
  *
  * The bit layout of imm25 is:
- *   [24]    [23]    [22]    [21:11]      [10:0]
+ *   [24]    [23]    [22]    [21:12]      [11:0]
  *   S       I1      I2      imm10        imm11
  *
  * Range: ±16MB (±16777216 bytes)
@@ -50,9 +50,9 @@ export function encodeBl(fromAddr: number, toAddr: number): Uint8Array {
 	const S = offset < 0 ? 1 : 0;
 
 	// Extract components from 25-bit value
-	// imm10 = bits [21:11] = shift right by 11
-	const imm10 = (imm25 >> 11) & 0x7ff;
-	// imm11 = bits [10:0]
+	// imm10 = bits [21:12] (10 bits)
+	const imm10 = (imm25 >> 12) & 0x3ff;
+	// imm11 = bits [10:0] (11 bits)
 	const imm11 = imm25 & 0x7ff;
 	// I1 = bit 23, I2 = bit 22
 	const I1 = (imm25 >> 23) & 1;
@@ -332,13 +332,15 @@ export function decodeBlTarget(fromAddr: number, blBytes: Uint8Array): number {
 	const I2 = (~(J2 ^ S)) & 1;
 
 	// Reconstruct offset
-	// Note: imm10 was encoded at bits [21:11] of imm25, so shift back by 11
-	const imm25 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 11) | imm11;
+	// Note: imm10 was encoded at bits [21:12] of imm25, so shift back by 12
+	const imm25 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | imm11;
 
 	let imm32 = imm25 << 1;
 	if (S) {
+		// Sign extend for negative offsets
 		imm32 |= 0xfe000000;
 	}
+	// For positive offsets (S=0), the upper bits are already 0
 
 	// Convert to signed 32-bit
 	if (imm32 & 0x80000000) {

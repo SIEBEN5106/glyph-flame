@@ -4,7 +4,7 @@
 ECHO MINI Theme Color Patcher
 
 A tool to patch firmware with custom theme colors.
-Reuses theme_analyzer_v3.py for code analysis.
+Reuses theme_extractor.py for code analysis.
 
 Usage:
     python theme_patcher.py firmware.IMG --colors config.json --output patched.IMG
@@ -24,9 +24,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from pathlib import Path
 
-# Import from theme_analyzer_v3
+# Import from theme_extractor
 try:
-    from theme_analyzer_v3 import (
+    from theme_extractor import (
         ThumbDecoder,
         MovwRecord,
         ThemeFunctionDetector,
@@ -41,7 +41,7 @@ try:
     HAS_ANALYZER = True
 except ImportError as e:
     HAS_ANALYZER = False
-    print(f"Warning: theme_analyzer_v3.py import failed: {e}. Some features will be limited.")
+    print(f"Warning: theme_extractor.py import failed: {e}. Some features will be limited.")
 
 # Version-specific hints (optional, used for faster detection)
 # The patcher will auto-detect addresses if these are not provided
@@ -57,7 +57,7 @@ def discover_flac_function(data: bytes, search_start: int = 0x80000, search_end:
     """
     Discover FLAC function address and patch point by searching for signature pattern.
 
-    Uses the shared _discover_flac_patch_point from theme_analyzer_v3.
+    Uses the shared _discover_flac_patch_point from theme_extractor.
 
     Returns: (patch_point_addr, patch_point_addr) or None if not found
     """
@@ -71,7 +71,7 @@ def discover_menu_function(data: bytes, search_start: int = 0x30000, search_end:
     """
     Discover Menu function address and patch point by searching for preload_store pattern.
 
-    Uses the shared _discover_menu_patch_point from theme_analyzer_v3.
+    Uses the shared _discover_menu_patch_point from theme_extractor.
 
     Returns: (patch_point_addr, patch_point_addr) or None if not found
     """
@@ -297,11 +297,15 @@ class NopSlideFinder:
         candidates = []
 
         for slide in self.slides:
-            if slide.size < required_size:
+            # Enforce 4-byte alignment for BL targets (ARM Thumb2 requirement)
+            aligned_start = (slide.start + 3) & ~3
+            adjusted_size = slide.end - aligned_start
+
+            if adjusted_size < required_size:
                 continue
 
             # Check distance to theme functions
-            distances = [abs(slide.start - f) for f in theme_functions]
+            distances = [abs(aligned_start - f) for f in theme_functions]
             max_distance = max(distances) if distances else 0
 
             # Must be within BL range (16MB)
@@ -311,8 +315,13 @@ class NopSlideFinder:
             # Prefer smaller slides (don't waste large reserved areas)
             # and slides closer to functions
             candidates.append({
-                'slide': slide,
-                'utilization': required_size / slide.size,
+                'slide': NopSlide(
+                    start=aligned_start,
+                    end=aligned_start + required_size,
+                    size=required_size,
+                    source='selected'
+                ),
+                'utilization': required_size / adjusted_size,
                 'max_distance': max_distance
             })
 
@@ -323,9 +332,7 @@ class NopSlideFinder:
         # then by distance
         candidates.sort(key=lambda x: (abs(1 - x['utilization']), x['max_distance']))
 
-        best = candidates[0]['slide']
-        best.source = "selected"
-        return best
+        return candidates[0]['slide']
 
     def verify_slide_unused(self, slide: NopSlide, code_refs: set) -> Tuple[bool, str]:
         """Verify NOP slide is not used by any code"""
@@ -523,7 +530,7 @@ def encode_bl(from_addr: int, to_addr: int) -> bytes:
     I1 = (imm25 >> 23) & 1
     I2 = (imm25 >> 22) & 1
     imm10 = (imm25 >> 12) & 0x3FF
-    imm11 = imm25 & 0xFFF
+    imm11 = imm25 & 0x7FF  # Fixed: was 0xFFF (12 bits), now 0x7FF (11 bits)
 
     # J1 = NOT(S XOR I1), J2 = NOT(S XOR I2)
     J1 = (~(S ^ I1)) & 1

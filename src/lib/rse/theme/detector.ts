@@ -73,7 +73,8 @@ export class PatchDetector {
 		const I1 = ~(J1 ^ S) & 1;
 		const I2 = ~(J2 ^ S) & 1;
 
-		let imm32 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 11) | imm11;
+		// imm10 is at bits [21:12], so shift by 12
+		let imm32 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | imm11;
 		if (S) {
 			imm32 = imm32 | 0xfe000000;
 		}
@@ -325,7 +326,8 @@ export function detectFirmwarePatched(data: Uint8Array): boolean {
 				const checkAddr = addr + checkOffset;
 				if (checkAddr + 4 <= data.length) {
 					const hw = data[checkAddr] | (data[checkAddr + 1] << 8);
-					if ((hw & 0xfbf0) === 0xf200) {
+					// MOVW: first halfword starts with 11110 i 100100 (0xF2xx or 0xF6xx)
+					if ((hw & 0xfb00) === 0xf200) {
 						menuPatternCount++;
 						break;
 					}

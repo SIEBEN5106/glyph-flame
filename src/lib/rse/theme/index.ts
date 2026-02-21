@@ -26,6 +26,9 @@ export { NopSlideFinder } from './nop-slide.js';
 // Patch detection
 export { PatchDetector, createPatchInfo, detectFirmwarePatched } from './detector.js';
 
+// Behavior analysis
+export { BehaviorAnalyzer } from './behavior.js';
+
 // Patch metadata
 export {
 	createPatchMetadata,
