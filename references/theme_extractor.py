@@ -122,37 +122,6 @@ class ThemeFunction:
         pass
 
 
-# UI Element Label Mapping (based on known function addresses and patterns)
-UI_ELEMENT_LABELS = {
-    # Known function address to UI element mapping for V3.1.0
-    # These addresses may differ across versions
-}
-
-
-def identify_ui_element(func_addr: int, pattern_type: str, color_values: List[int]) -> str:
-    """Try to identify the UI element for a function"""
-    # Heuristic judgment based on address range and color values
-
-    # Menu text colors: usually 3 distinct color writes (R1, R2, R3)
-    # Color values usually include 0x77DE (purple), 0xFFFF (white), 0x2945 (green)
-    if pattern_type == "preload_store":
-        if 0x77DE in color_values or 0xFFFF in color_values:
-            return "Menu Text Colors (Highlight/Foreground)"
-
-    # FLAC String: usually only 2 colors (0xE162 and 0x44DE)
-    # Theme 4 uses one color, others use another
-    if pattern_type == "ite":
-        if 0xE162 in color_values:
-            return "FLAC String Text"
-        if 0x44DE in color_values:
-            return "FLAC String Text"
-
-    # Progress Bar Background
-    # Marquee Overlay Background
-
-    return "Unknown UI Element"
-
-
 @dataclass
 class AnalysisReport:
     """Analysis Report"""
@@ -160,6 +129,19 @@ class AnalysisReport:
     firmware_size: int
     theme_functions: List[ThemeFunction] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+
+
+@dataclass
+class PatchInfo:
+    """Information about a patched firmware"""
+    is_patched: bool = False
+    patch_type: str = "none"  # "none", "flac_only", "menu_only", "full", "unknown"
+    flac_patched: bool = False
+    menu_patched: bool = False
+    nop_has_code: bool = False
+    patch_target_addr: int = 0
+    confidence: float = 0.0
+    metadata: Optional[Dict] = None
 
 
 # ============================================================================
@@ -1573,6 +1555,11 @@ class ReportGenerator:
         self.decoder = decoder
         self.functions = []
         self.theme_colors = defaultdict(dict)  # theme_id -> {target: color}
+        self.patch_info: Optional[PatchInfo] = None
+
+    def set_patch_info(self, patch_info: PatchInfo):
+        """Set patch detection info"""
+        self.patch_info = patch_info
 
     def add_function(self, func: ThemeFunction, theme_results: Dict[int, List[ColorWrite]]):
         """Add function analysis result"""
@@ -1690,7 +1677,7 @@ class ReportGenerator:
         # For switch_case pattern, check FLAC first
         if func.pattern_type == "switch_case" and self.decoder:
             # detect FLAC using context analysis
-            from theme_analyzer_v3 import ThemeDiscovery
+            from theme_extractor import ThemeDiscovery
             flac_context = ThemeDiscovery.detect_flac_by_context(self.decoder, func.addr)
             if flac_context['is_flac']:
                 return "FLAC String Text"
@@ -2054,11 +2041,124 @@ class ReportGenerator:
             color: #666;
             font-size: 0.85em;
         }}
+        .patch-banner {{
+            background: linear-gradient(135deg, rgba(255, 100, 100, 0.2) 0%, rgba(255, 50, 50, 0.3) 100%);
+            border: 2px solid #ff6b6b;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }}
+        .patch-icon {{
+            font-size: 2.5em;
+            animation: pulse 2s infinite;
+        }}
+        @keyframes pulse {{
+            0%, 100% {{ opacity: 1; }}
+            50% {{ opacity: 0.6; }}
+        }}
+        .patch-info {{
+            flex: 1;
+        }}
+        .patch-title {{
+            color: #ff6b6b;
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }}
+        .patch-details {{
+            color: #ccc;
+            font-size: 0.95em;
+        }}
+        .patch-detail-item {{
+            margin: 5px 0;
+        }}
+        .patch-badge {{
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            margin-left: 5px;
+        }}
+        .badge-full {{ background: #ff6b6b; color: white; }}
+        .badge-flac {{ background: #ffaa00; color: black; }}
+        .badge-menu {{ background: #00aaff; color: white; }}
+        .badge-unknown {{ background: #888; color: white; }}
+        .confidence-bar {{
+            width: 100px;
+            height: 8px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+            overflow: hidden;
+            display: inline-block;
+            vertical-align: middle;
+        }}
+        .confidence-fill {{
+            height: 100%;
+            background: linear-gradient(90deg, #ffaa00, #00ff88);
+            transition: width 0.3s;
+        }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎨 ECHO MINI Theme Color Analysis Report</h1>
+"""
+
+        # Add patch status banner if firmware is patched
+        if self.patch_info and self.patch_info.is_patched:
+            patch_type_labels = {
+                "full": ("Full Theme Patch", "badge-full"),
+                "flac_only": ("FLAC String Patch", "badge-flac"),
+                "menu_only": ("Menu Color Patch", "badge-menu"),
+                "unknown": ("Unknown Patch", "badge-unknown"),
+            }
+            label, badge_class = patch_type_labels.get(
+                self.patch_info.patch_type, ("Unknown Patch", "badge-unknown")
+            )
+
+            # Format metadata if available
+            metadata_html = ""
+            if self.patch_info.metadata:
+                meta = self.patch_info.metadata
+                version = meta.get('version', 'Unknown')
+                timestamp = meta.get('timestamp', 'Unknown')
+                metadata_html = f"""
+                <div class="patch-detail-item">
+                    <strong>Patch version:</strong> {version} |
+                    <strong>Applied:</strong> {timestamp}
+                </div>"""
+
+            html += f"""
+        <div class="patch-banner">
+            <div class="patch-icon">⚠️</div>
+            <div class="patch-info">
+                <div class="patch-title">
+                    Firmware Has Been Patched!
+                    <span class="patch-badge {badge_class}">{label}</span>
+                </div>
+                <div class="patch-details">
+                    <div class="patch-detail-item">
+                        <strong>Patch target:</strong> 0x{self.patch_info.patch_target_addr:05X}
+                    </div>
+                    <div class="patch-detail-item">
+                        <strong>FLAC patched:</strong> {'✅ Yes' if self.patch_info.flac_patched else '❌ No'} |
+                        <strong>Menu patched:</strong> {'✅ Yes' if self.patch_info.menu_patched else '❌ No'} |
+                        <strong>NOP has code:</strong> {'✅ Yes' if self.patch_info.nop_has_code else '❌ No'}
+                    </div>
+                    <div class="patch-detail-item">
+                        <strong>Confidence:</strong>
+                        <span class="confidence-bar">
+                            <span class="confidence-fill" style="width: {self.patch_info.confidence * 100:.0f}%"></span>
+                        </span>
+                        {self.patch_info.confidence * 100:.0f}%
+                    </div>
+                    {metadata_html}
+                </div>
+            </div>
+        </div>
 """
 
         # If has color data, show summary
@@ -2190,7 +2290,7 @@ class ReportGenerator:
             elif func.pattern_type == "switch_case" and "FLAC" in func.ui_element:
                 # FLAC String function (switch_case Pattern)
                 # get colors using context detection
-                from theme_analyzer_v3 import ThemeDiscovery
+                from theme_extractor import ThemeDiscovery
                 flac_context = ThemeDiscovery.detect_flac_by_context(self.decoder, func.addr)
                 if flac_context['is_flac']:
                     html += f"""
@@ -2239,7 +2339,7 @@ class ReportGenerator:
         html += f"""
         <footer>
             Generated at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} |
-            Tool: theme_analyzer_v3.py
+            Tool: theme_extractor.py
         </footer>
     </div>
 </body>
@@ -3022,7 +3122,7 @@ class BatchAnalyzer:
 
         <footer>
             📊 Analysis completed at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}<br>
-            Tool: theme_analyzer_v3.py | Analyzed total {len(results)} firmware versions
+            Tool: theme_extractor.py | Analyzed total {len(results)} firmware versions
         </footer>
     </div>
 </body>
@@ -3198,7 +3298,7 @@ class ThemeColorAnalyzer:
             print(f"size: {len(self.data):,} bytes")
 
         # 0. dynamicstatefoundTheme count
-        from theme_analyzer_v3 import ThemeDiscovery
+        from theme_extractor import ThemeDiscovery
         self.theme_count, self.theme_names = ThemeDiscovery.discover_theme_count(self.data)
         if verbose:
             print(f"found {self.theme_count} theme: {self.theme_names}")
@@ -3209,7 +3309,16 @@ class ThemeColorAnalyzer:
         if verbose:
             print(f"detectto {len(functions)} candidatesfunction")
 
-        # 2. simulationeachfunctions，andusingbehavioranalysisidentify UI Element
+        # 2. Check for existing patches
+        patch_detector = PatchDetector(self.data, self.decoder)
+        self.patch_info = patch_detector.detect_patch(functions)
+
+        if verbose and self.patch_info.is_patched:
+            print(f"Patch detected: {self.patch_info.patch_type} (confidence: {self.patch_info.confidence:.0%})")
+            if self.patch_info.metadata:
+                print(f"  Patch metadata found at 0x{self.patch_info.metadata.get('metadata_addr', 0):X}")
+
+        # 3. simulationeachfunctions，andusingbehavioranalysisidentify UI Element
         for func in functions:
             theme_results = {}
 
@@ -3223,7 +3332,10 @@ class ThemeColorAnalyzer:
 
             self.report.add_function(func, theme_results)
 
-        # 3. generatereport
+        # 4. Add patch info to report
+        self.report.set_patch_info(self.patch_info)
+
+        # 5. generatereport
         return self.report.generate_markdown()
 
     def _identify_ui_element_by_behavior(self, func: ThemeFunction, theme_results: Dict) -> str:
@@ -3235,7 +3347,7 @@ class ThemeColorAnalyzer:
         # 2. '|' charactercontext (changecanrely)
         if func.pattern_type == "ite":
             # firstfirsttrytestusingcontextdetect (has '|' character)
-            from theme_analyzer_v3 import ThemeDiscovery
+            from theme_extractor import ThemeDiscovery
             flac_context = ThemeDiscovery.detect_flac_by_context(self.decoder, func.addr)
             if flac_context['is_flac']:
                 return "FLAC String Text"
@@ -3248,7 +3360,7 @@ class ThemeColorAnalyzer:
         # forat switch_case Pattern，alsocheckchecknothas FLAC contextfeature
         if func.pattern_type == "switch_case":
             # firstfirstcheckcheck FLAC context
-            from theme_analyzer_v3 import ThemeDiscovery
+            from theme_extractor import ThemeDiscovery
             flac_context = ThemeDiscovery.detect_flac_by_context(self.decoder, func.addr)
             if flac_context['is_flac']:
                 return "FLAC String Text"
@@ -3281,12 +3393,262 @@ class ThemeColorAnalyzer:
 
 
 # ============================================================================
+# Patch Detection
+# ============================================================================
+
+
+class PatchDetector:
+    """Detect if firmware has been patched with custom theme colors"""
+
+    # Known original instruction patterns
+    FLAC_ORIGINAL = bytes.fromhex('04290CBF')  # CMP R1,#4 + ITE EQ
+    MENU_ORIGINAL = bytes.fromhex('4FF0000C')  # MOV.W R12, #0
+
+    # Patch metadata magic
+    PATCH_MAGIC = b'ECHO'
+
+    def __init__(self, firmware_data: bytes, decoder: ThumbDecoder):
+        self.data = firmware_data
+        self.decoder = decoder
+
+    def detect_patch(self, theme_functions: List['ThemeFunction']) -> PatchInfo:
+        """
+        Detect if firmware has been patched
+
+        Returns PatchInfo with detection results
+        """
+        info = PatchInfo()
+
+        flac_funcs = [f for f in theme_functions if f.ui_element and 'FLAC' in f.ui_element]
+        menu_funcs = [f for f in theme_functions if f.ui_element and 'Menu' in f.ui_element]
+
+        # Check FLAC functions
+        for func in flac_funcs:
+            is_patched, target = self._check_flac_patched(func.addr)
+            if is_patched:
+                info.flac_patched = True
+                info.patch_target_addr = target
+                break
+
+        # Check Menu functions
+        for func in menu_funcs:
+            is_patched, target = self._check_menu_patched(func.addr)
+            if is_patched:
+                info.menu_patched = True
+                if not info.patch_target_addr:
+                    info.patch_target_addr = target
+                break
+
+        # Check NOP region for code
+        info.nop_has_code = self._check_nop_region_for_code()
+
+        # Determine overall patch status
+        if info.flac_patched and info.menu_patched:
+            info.patch_type = "full"
+            info.confidence = 0.95
+        elif info.flac_patched:
+            info.patch_type = "flac_only"
+            info.confidence = 0.8
+        elif info.menu_patched:
+            info.patch_type = "menu_only"
+            info.confidence = 0.8
+        elif info.nop_has_code:
+            info.patch_type = "unknown"
+            info.confidence = 0.5
+        else:
+            info.patch_type = "none"
+            info.confidence = 1.0
+
+        info.is_patched = info.patch_type != "none"
+
+        # Try to read patch metadata
+        if info.is_patched:
+            info.metadata = self._read_patch_metadata()
+
+        return info
+
+    def _check_flac_patched(self, func_addr: int) -> Tuple[bool, int]:
+        """Check if FLAC function is patched"""
+        # Find CMP+ITE pattern
+        for offset in range(0, 500, 2):
+            addr = func_addr + offset
+            if addr + 4 > len(self.data):
+                break
+
+            if self.data[addr:addr+2] == bytes.fromhex('0429'):  # CMP R1,#4
+                if self.data[addr+2:addr+4] == bytes.fromhex('0CBF'):  # ITE EQ
+                    # Found the pattern, check what's there now
+                    current = self.data[addr:addr+4]
+                    if current == self.FLAC_ORIGINAL:
+                        return False, 0
+                    elif self._is_bl_instruction(addr):
+                        # Decode BL target
+                        target = self._decode_bl_target(addr)
+                        return True, target
+                    return False, 0
+
+        return False, 0
+
+    def _check_menu_patched(self, func_addr: int) -> Tuple[bool, int]:
+        """Check if Menu function is patched"""
+        # Find MOV.W R12, #0 pattern
+        for offset in range(0, 200, 2):
+            addr = func_addr + offset
+            if addr + 4 > len(self.data):
+                break
+
+            if self.data[addr:addr+4] == self.MENU_ORIGINAL:
+                # Found original, check what's there now
+                current = self.data[addr:addr+4]
+                if current == self.MENU_ORIGINAL:
+                    return False, 0
+                elif self._is_bl_instruction(addr):
+                    target = self._decode_bl_target(addr)
+                    return True, target
+                return False, 0
+
+        return False, 0
+
+    def _is_bl_instruction(self, addr: int) -> bool:
+        """Check if instruction at addr is a BL"""
+        if addr + 4 > len(self.data):
+            return False
+        hw = self.data[addr] | (self.data[addr + 1] << 8)
+        return (hw & 0xF800) == 0xF000
+
+    def _decode_bl_target(self, addr: int) -> int:
+        """Decode BL instruction target address"""
+        if addr + 4 > len(self.data):
+            return 0
+
+        hw1 = self.data[addr] | (self.data[addr + 1] << 8)
+        hw2 = self.data[addr + 2] | (self.data[addr + 3] << 8)
+
+        # Decode BL: 11110 S imm10 11 J1 1 J2 imm11
+        S = (hw1 >> 10) & 1
+        imm10 = hw1 & 0x3FF
+        J1 = (hw2 >> 13) & 1
+        J2 = (hw2 >> 11) & 1
+        imm11 = hw2 & 0x7FF
+
+        I1 = (~(S ^ J1)) & 1
+        I2 = (~(S ^ J2)) & 1
+
+        imm32 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | (imm11 << 1)
+
+        if S:
+            imm32 = imm32 - (1 << 25)
+
+        return addr + 4 + imm32
+
+    def _check_nop_region_for_code(self) -> bool:
+        """Check if known NOP region has code"""
+        # Check common NOP slide locations
+        nop_regions = [
+            (0x12BBFC, 64),  # 440 byte region
+            (0x588A8, 64),   # 132KB region
+        ]
+
+        for start, size in nop_regions:
+            if start + size <= len(self.data):
+                region = self.data[start:start + size]
+                if region != b'\x00' * size:
+                    # Has non-zero bytes
+                    non_zero = sum(1 for b in region if b != 0)
+                    if non_zero > size // 2:
+                        return True
+
+        return False
+
+    def _read_patch_metadata(self) -> Optional[Dict]:
+        """Read patch metadata from NOP region"""
+        # Try to find metadata at end of NOP regions
+        metadata_locations = [
+            0x12BDB4 - 51,  # End of 440 byte region minus metadata size
+        ]
+
+        for addr in metadata_locations:
+            if addr < 0 or addr + 51 > len(self.data):
+                continue
+
+            data = self.data[addr:addr + 51]
+
+            if data[0:4] != self.PATCH_MAGIC:
+                continue
+
+            try:
+                import struct
+                version = data[4]
+                timestamp = struct.unpack('<I', data[5:9])[0]
+
+                flac_colors = []
+                for i in range(5):
+                    offset = 9 + i * 2
+                    flac_colors.append(struct.unpack('<H', data[offset:offset+2])[0])
+
+                menu_colors = []
+                for i in range(15):
+                    offset = 19 + i * 2
+                    menu_colors.append(struct.unpack('<H', data[offset:offset+2])[0])
+
+                # Verify checksum
+                stored_crc = struct.unpack('<H', data[49:51])[0]
+
+                return {
+                    'version': version,
+                    'timestamp': timestamp,
+                    'flac_colors': flac_colors,
+                    'menu_colors': menu_colors,
+                    'metadata_addr': addr
+                }
+            except:
+                continue
+
+        return None
+
+    def extract_patched_colors(self, patch_target: int, func_type: str) -> Dict[int, int]:
+        """
+        Extract colors from patched code
+
+        This traces into the NOP region and extracts colors from the patch code
+        """
+        colors = {}
+
+        if patch_target == 0:
+            return colors
+
+        # Scan for MOVW instructions in the patched code region
+        scan_start = patch_target
+        scan_end = min(patch_target + 500, len(self.data))
+
+        offset = scan_start
+        while offset < scan_end:
+            instr = self.decoder.decode(offset)
+            if instr is None:
+                offset += 2
+                continue
+
+            if instr.instr_type == InstructionType.MOVW:
+                # Found a MOVW, this might be a color
+                if instr.imm > 0:  # Non-zero immediate
+                    # Determine theme ID from context
+                    # This is simplified - full implementation would trace control flow
+                    theme_id = len(colors)
+                    if theme_id < 5:
+                        colors[theme_id] = instr.imm
+
+            offset += len(instr.raw_bytes)
+
+        return colors
+
+
+# ============================================================================
 # Main Program
 # ============================================================================
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python theme_analyzer_v3.py <firmware.img|firmwares_dir> [Options]")
+        print("Usage: python theme_extractor.py <firmware.img|firmwares_dir> [Options]")
         print("")
         print("Options:")
         print("  --verbose, -v    Show verbose output")
@@ -3294,9 +3656,9 @@ def main():
         print("  --batch          Batch analyze firmwares directory")
         print("")
         print("Examples:")
-        print("  python theme_analyzer_v3.py HIFIEC10.IMG")
-        print("  python theme_analyzer_v3.py HIFIEC10.IMG --html")
-        print("  python theme_analyzer_v3.py firmwares/ --batch --html")
+        print("  python theme_extractor.py HIFIEC10.IMG")
+        print("  python theme_extractor.py HIFIEC10.IMG --html")
+        print("  python theme_extractor.py firmwares/ --batch --html")
         sys.exit(1)
 
     target = sys.argv[1]
