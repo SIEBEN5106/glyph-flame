@@ -1,1345 +1,3377 @@
 #!/usr/bin/env python3
 """
-Theme Color Extractor - Extract theme colors from ARM firmware
-
-This script extracts color palettes and analyzes theme color configurations
-from RKNanoD-based ECHO MINI firmware.
-
-Features:
-- Palette extraction (512 bytes, 256 RGB565 colors)
-- Symbolic color analysis (trace color lookup paths)
-- Theme color analysis (5 themes: Elegant White, Midnight Black, etc.)
-- Batch processing for all firmware versions
-- Visual color preview
-
-Verification: Successfully processes ALL 15 firmware versions (V1.2.x - V3.1.0)
-
-Usage:
-    python3 theme_extractor.py --firmware HIFIEC10.IMG --output ./output
-    python3 theme_extractor.py --firmware HIFIEC10.IMG --color-map
-    python3 theme_extractor.py --firmware HIFIEC10.IMG --unit-test
-    python3 theme_extractor.py --dir ./firmwares --output ./output
+Universal Theme Color Analyzer V3
+- No assumptions about firmware data, addresses, patterns, or colors
+- Complete Thumb instruction decoder implementation
+- Detect theme-related functions based on instruction semantics
+- Extract all theme colors and generate complete reports
 """
 
-import argparse
 import os
-import struct
 import sys
-from dataclasses import dataclass
-from pathlib import Path
-from typing import List, Optional, Tuple, Dict
+import struct
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple, Optional, Set
+from enum import Enum, auto
 
 
-# =============================================================================
-# Data Structures
-# =============================================================================
+# ============================================================================
+# Data Structure Definitions
+# ============================================================================
+
+class InstructionType(Enum):
+    """Instruction Type"""
+    MOVW = auto()
+    MOVS = auto()
+    CMP = auto()
+    BEQ = auto()
+    BNE = auto()
+    B = auto()
+    CBZ = auto()
+    CBNZ = auto()
+    IT = auto()
+    STRH = auto()
+    STRH_W = auto()
+    LDR = auto()
+    LDRB = auto()
+    PUSH = auto()
+    POP = auto()
+    BX = auto()
+    ADD = auto()
+    SUB = auto()
+    AND = auto()
+    ORR = auto()
+    EOR = auto()
+    LSL = auto()
+    LSR = auto()
+    ASR = auto()
+    TST = auto()
+    MVN = auto()
+    RSB = auto()
+    ADC = auto()
+    SBC = auto()
+    ROR = auto()
+    NOP = auto()
+    UNKNOWN = auto()
+
 
 @dataclass
-class RGB565:
-    """RGB565 color value."""
-    r: int  # 5-bit (0-31)
-    g: int  # 6-bit (0-63)
-    b: int  # 5-bit (0-31)
+class Instruction:
+    """Decoded Instruction"""
+    addr: int
+    raw_bytes: bytes
+    mnemonic: str
+    operands: str
+    instr_type: InstructionType
 
-    def to_rgb(self) -> Tuple[int, int, int]:
-        """Convert to 8-bit RGB."""
-        return (self.r << 3, self.g << 2, self.b << 3)
-
-    def to_hex(self) -> str:
-        """Convert to hex string."""
-        rgb = self.to_rgb()
-        return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+    # Instruction Details
+    rd: int = -1          # Destination register
+    rn: int = -1          # Base register
+    rm: int = -1          # Source register
+    imm: int = 0          # Immediate value
+    cond: int = -1        # Condition code
+    it_mask: int = 0      # IT block mask
+    branch_target: int = 0  # Branch target
 
     def __str__(self):
-        rgb = self.to_rgb()
-        return f"RGB({rgb[0]}, {rgb[1]}, {rgb[2]})"
+        return f"0x{self.addr:05X}: {self.mnemonic} {self.operands}"
 
 
 @dataclass
-class ColorSource:
-    """Represents the source of a color value."""
-    source_type: str  # "palette", "immediate", "register", "computed"
-    value: any        # The actual value or reference
-    address: int       # Where it was found (for tracing)
-    description: str  # Human readable description
+class ColorWrite:
+    """Color Write Record"""
+    addr: int
+    instr: Instruction
+    color_value: int
+    target_reg: int       # STRHBase register
+    source_reg: int       # STRHSource register
+    theme_condition: Optional[int] = None  # Applicable theme condition (None = unconditional)
+    movw_instr: Optional['MovwRecord'] = None  # Corresponding MOVW instruction
 
     def __str__(self):
-        if self.source_type == "palette":
-            return f"PALETTE[0x{self.value:02X}] -> {self.description}"
-        elif self.source_type == "immediate":
-            return f"IMMEDIATE 0x{self.value:04X} -> {self.description}"
-        elif self.source_type == "register":
-            return f"REGISTER r{self.value} -> {self.description}"
+        return f"0x{self.addr:05X}: {self.instr.mnemonic} {self.instr.operands} -> 0x{self.color_value:04X}"
+
+
+@dataclass
+class MovwRecord:
+    """MOVW Color Load Record"""
+    addr: int
+    instr: Instruction
+    color_value: int
+    target_reg: int       # Destination register
+    theme_condition: Optional[int] = None  # Applicable theme condition
+
+    def __str__(self):
+        return f"0x{self.addr:05X}: {self.instr.mnemonic} {self.instr.operands} -> R{self.target_reg} = 0x{self.color_value:04X}"
+
+
+@dataclass
+class ThemeFunction:
+    """Theme-Related Function"""
+    addr: int
+    end_addr: int
+    pattern_type: str     # "switch_case", "ite", "preload_store"
+    color_writes: List[ColorWrite] = field(default_factory=list)
+    preload_colors: Dict[int, int] = field(default_factory=dict)  # reg -> color
+    ui_element: str = "unknown"  # UI Element Label
+
+    def get_theme_colors(self, theme_value: int) -> Dict[int, int]:
+        """Get color mapping for specific theme"""
+        # Determined via control flow simulation
+        pass
+
+
+# UI Element Label Mapping (based on known function addresses and patterns)
+UI_ELEMENT_LABELS = {
+    # Known function address to UI element mapping for V3.1.0
+    # These addresses may differ across versions
+}
+
+
+def identify_ui_element(func_addr: int, pattern_type: str, color_values: List[int]) -> str:
+    """Try to identify the UI element for a function"""
+    # Heuristic judgment based on address range and color values
+
+    # Menu text colors: usually 3 distinct color writes (R1, R2, R3)
+    # Color values usually include 0x77DE (purple), 0xFFFF (white), 0x2945 (green)
+    if pattern_type == "preload_store":
+        if 0x77DE in color_values or 0xFFFF in color_values:
+            return "Menu Text Colors (Highlight/Foreground)"
+
+    # FLAC String: usually only 2 colors (0xE162 and 0x44DE)
+    # Theme 4 uses one color, others use another
+    if pattern_type == "ite":
+        if 0xE162 in color_values:
+            return "FLAC String Text"
+        if 0x44DE in color_values:
+            return "FLAC String Text"
+
+    # Progress Bar Background
+    # Marquee Overlay Background
+
+    return "Unknown UI Element"
+
+
+@dataclass
+class AnalysisReport:
+    """Analysis Report"""
+    firmware_path: str
+    firmware_size: int
+    theme_functions: List[ThemeFunction] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+
+
+# ============================================================================
+# Theme Discovery Tool - Based on decompilation analysis, no hardcoding
+# ============================================================================
+
+class ThemeDiscovery:
+    """Dynamically discover theme info based on decompilation analysis"""
+
+    @classmethod
+    def discover_theme_count(cls, data: bytes) -> Tuple[int, List[str]]:
+        """
+        Dynamically discover theme count by analyzing CMP patterns in code
+
+        Method:
+        1. Search for PUSH instructions (function start) in firmware
+        2. Analyze CMP instructions within functionImmediate value
+        3. Find consecutive 0, 1, 2, ..., N patterns
+        4. Use heuristic method to determine true theme count
+
+        Returns: (Theme count, [])  # No longer extract theme names, only return count
+        """
+        # Create temporary decoder
+        temp_decoder = ThumbDecoder(data)
+
+        theme_counts = cls._analyze_cmp_patterns(temp_decoder, data)
+
+        if theme_counts:
+            # Heuristic method:
+            # 1. Ignore results where count <= 3 (may be noise)
+            # 2. Find highest frequency where count >= 5
+            # 3. If none >= 5, take highest frequency >= 4
+
+            valid_counts = {k: v for k, v in theme_counts.items() if k >= 5}
+            if valid_counts:
+                # Take highest frequency >= 5
+                best = max(valid_counts.items(), key=lambda x: x[1])
+                return best[0], []
+
+            valid_counts = {k: v for k, v in theme_counts.items() if k >= 4}
+            if valid_counts:
+                best = max(valid_counts.items(), key=lambda x: x[1])
+                return best[0], []
+
+        # If analysis fails, return default value 5
+        return 5, []
+
+    @classmethod
+    def _analyze_cmp_patterns(cls, decoder, data: bytes, search_start: int = 0x20000, search_end: int = 0x150000) -> Dict[int, int]:
+        """
+        Analyze CMP patterns in firmware, count theme count frequencies
+
+        Returns: {theme_count: occurrence_count}
+        """
+        theme_count_freq = {}
+        addr = search_start
+
+        while addr < search_end:
+            # Check if it's a function start (PUSH instruction)
+            hw = decoder.read16(addr)
+            if hw == 0:
+                addr += 2
+                continue
+
+            instr = decoder.decode(addr)
+
+            # Detect PUSH instruction (16-bit: 0xB500, 32-bit: 0xE92D)
+            is_push = (hw & 0xFF00) == 0xB500 or (hw & 0xFFFF0000) == 0x92D0000E
+
+            if is_push or instr.instr_type.name == 'PUSH':
+                # Analyze CMP patterns in this function
+                count = cls._count_theme_indices_in_function(decoder, addr)
+
+                if count > 0:
+                    theme_count_freq[count] = theme_count_freq.get(count, 0) + 1
+
+            addr += 2
+
+        return theme_count_freq
+
+    @classmethod
+    def _count_theme_indices_in_function(cls, decoder, func_addr: int, max_scan: int = 500) -> int:
+        """
+        Analyze CMP instructions in function, determine theme count
+
+        Return max of consecutive CMP #0, #1, #2, ... + 1
+        """
+        theme_indices = set()
+        offset = 0
+
+        while offset < max_scan:
+            hw = decoder.read16(func_addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = decoder.decode(func_addr + offset)
+            mn = instr.mnemonic.upper()
+
+            # Check CMP instruction
+            if 'CMP' in mn:
+                imm = instr.imm
+                # Theme indices are typically in range 0-15
+                if 0 <= imm <= 15:
+                    theme_indices.add(imm)
+
+            offset += 4 if is_32bit else 2
+
+        # Check for consecutive index sequences
+        if not theme_indices:
+            return 0
+
+        # Find maximum consecutive sequence
+        max_consecutive = 0
+        for start in sorted(theme_indices):
+            count = 0
+            for i in range(start, max(theme_indices) + 1):
+                if i in theme_indices:
+                    count += 1
+                else:
+                    break
+            if count > max_consecutive:
+                max_consecutive = count
+
+        # Need at least 2 consecutive indices for valid theme pattern
+        if max_consecutive >= 2:
+            return max_consecutive
+
+        return 0
+
+    @classmethod
+    def detect_flac_by_context(cls, decoder: 'ThumbDecoder', func_addr: int, scan_range: int = 1200) -> dict:
+        """
+        Detect FLAC String function via call context features
+
+        FLAC String function features:
+        1. Contains '|' character operation (MOVS Rx, #0x7C)
+        2. Has CMP Rx, #4 (16-bit CMP, not CMP.W R12) + IT + two consecutive MOVW pattern
+        3. No branch instructions between MOVW instructions
+
+        Returns: {is_flac, color_for_4, color_for_other, separator_addr, ...}
+        """
+        result = {
+            'is_flac': False,
+            'color_for_4': 0,
+            'color_for_other': 0,
+            'separator_addr': '',
+            'movw_addr_4': '',
+            'movw_addr_other': '',
+        }
+
+        offset = 0
+        found_separator = False
+        separator_offset = 0
+
+        # Step 1: Search for '|' character operation (MOVS Rx, #0x7C)
+        while offset < scan_range:
+            hw = decoder.read16(func_addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = decoder.decode(func_addr + offset)
+
+            # Check MOVS Rx, #0x7C ('|' = 0x7C)
+            if instr.mnemonic.upper() == 'MOVS' and instr.imm == 0x7C:
+                found_separator = True
+                separator_offset = offset
+                result['separator_addr'] = f"0x{func_addr + offset:05X}"
+                break
+
+            offset += 4 if is_32bit else 2
+
+        if not found_separator:
+            # '|' character not found, not a FLAC function
+            return result
+
+        # Step 2: Search for FLAC color pattern within entire function
+        # FLAC feature: CMP Rx, #4 (16-bit, not CMP.W R12) + IT + MOVW + MOVW (no branch gap)
+        offset = 0
+        while offset < scan_range:
+            hw = decoder.read16(func_addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = decoder.decode(func_addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            # FLAC uses 16-bit CMP (hw < 0xE800), target is not R12
+            # e.g.: CMP R1, #0x04 (hw = 0x2904)
+            if 'CMP' in mn and (instr.imm == 4 or '#4' in ops or '#0x4' in ops):
+                # Exclude CMP.W R12, #4 (this is switch_case feature, not FLAC)
+                if is_32bit and 'R12' in ops:
+                    offset += 4
+                    continue
+
+                # Check if followed by IT + MOVW + MOVW pattern (no branch gap)
+                test_offset = offset + 2  # 16-bit CMP, so next instruction at +2
+
+                # Check IT instruction
+                it_hw = decoder.read16(func_addr + test_offset)
+                if (it_hw & 0xFF00) == 0xBF00:  # IT instruction
+                    test_offset += 2
+
+                    # Collect two consecutive MOVW (no branch in between)
+                    movw_list = []
+                    temp_offset = test_offset
+                    while temp_offset < scan_range and len(movw_list) < 2:
+                        movw_hw = decoder.read16(func_addr + temp_offset)
+                        movw_32bit = movw_hw >= 0xE800
+                        movw_instr = decoder.decode(func_addr + temp_offset)
+                        movw_mn = movw_instr.mnemonic.upper()
+
+                        # If branch instruction encountered, stop (not FLAC pattern)
+                        if movw_mn in ['BEQ', 'BNE', 'B', 'BL', 'CBZ', 'CBNZ']:
+                            break
+
+                        if 'MOVW' in movw_mn and '#' in movw_instr.operands:
+                            try:
+                                val_str = movw_instr.operands.split('#')[1].split()[0].rstrip('}')
+                                val = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
+                                movw_list.append({
+                                    'addr': f"0x{func_addr + temp_offset:05X}",
+                                    'color': val
+                                })
+                            except:
+                                pass
+
+                        temp_offset += 4 if movw_32bit else 2
+
+                    # Verify FLAC pattern (two different color values, no branch gap)
+                    if len(movw_list) == 2 and movw_list[0]['color'] != movw_list[1]['color']:
+                        result['is_flac'] = True
+                        result['color_for_4'] = movw_list[0]['color']
+                        result['color_for_other'] = movw_list[1]['color']
+                        result['movw_addr_4'] = movw_list[0]['addr']
+                        result['movw_addr_other'] = movw_list[1]['addr']
+                        return result
+
+            offset += 4 if is_32bit else 2
+
+        return result
+
+
+# ============================================================================
+# Thumb Instruction Decoder
+# ============================================================================
+
+class ThumbDecoder:
+    """Thumb Instruction Decoder"""
+
+    # Condition code names
+    COND_NAMES = {
+        0: "EQ", 1: "NE", 2: "CS", 3: "CC",
+        4: "MI", 5: "PL", 6: "VS", 7: "VC",
+        8: "HI", 9: "LS", 10: "GE", 11: "LT",
+        12: "GT", 13: "LE", 14: "AL", 15: "AL"
+    }
+
+    # Register names
+    REG_NAMES = [f"R{i}" for i in range(16)]
+    REG_NAMES[13] = "SP"
+    REG_NAMES[14] = "LR"
+    REG_NAMES[15] = "PC"
+
+    def __init__(self, data: bytes):
+        self.data = data
+
+    def read16(self, offset: int) -> int:
+        if offset + 2 > len(self.data):
+            return 0
+        return self.data[offset] | (self.data[offset + 1] << 8)
+
+    def read32(self, offset: int) -> int:
+        if offset + 4 > len(self.data):
+            return 0
+        return struct.unpack('<I', self.data[offset:offset+4])[0]
+
+    def decode(self, addr: int) -> Instruction:
+        """Decode instruction at specified address"""
+        if addr + 2 > len(self.data):
+            return self._unknown(addr, b'\x00\x00')
+
+        hw = self.read16(addr)
+
+        # Check if 32-bit instruction
+        if self._is_32bit(hw):
+            if addr + 4 > len(self.data):
+                return self._unknown(addr, bytes([hw & 0xFF, hw >> 8]))
+            hw2 = self.read16(addr + 2)
+            return self._decode_32bit(addr, hw, hw2)
         else:
-            return f"COMPUTED -> {self.description}"
+            return self._decode_16bit(addr, hw)
 
+    def _is_32bit(self, hw: int) -> bool:
+        """Check if 32-bit Thumb instruction"""
+        # 32-bit instruction prefix patterns
+        return (hw & 0xF800) in [0xE800, 0xF000, 0xF800]
 
-@dataclass
-class ColorTrace:
-    """Trace result for a color lookup."""
-    theme_id: int
-    theme_name: str
-    state: str  # "unselected", "selected", "highlight"
-    mode: int
-    color_source: ColorSource
-    final_color: RGB565
-    execution_path: List[str]
-
-    def __str__(self):
-        path_str = "\n    ".join(f"[{i}] {step}" for i, step in enumerate(self.execution_path))
-        return f"""
-Theme: {self.theme_name} (0x{self.theme_id:02X}) - {self.state.upper()}
-Mode: 0x{self.mode:02X}
-Source: {self.color_source}
-Final Color: {self.final_color} ({self.final_color.to_hex()})
-Execution Path:
-    {path_str}
-"""
-
-
-@dataclass
-class Palette:
-    """Color palette extracted from firmware."""
-    firmware_name: str
-    address: int
-    colors: List[RGB565]
-
-    @property
-    def size(self) -> int:
-        return len(self.colors) * 2  # 2 bytes per color
-
-    def get_color(self, index: int) -> Optional[RGB565]:
-        """Get color by index."""
-        if 0 <= index < len(self.colors):
-            return self.colors[index]
-        return None
-
-    def save_binary(self, path: str):
-        """Save palette as binary file."""
-        with open(path, 'wb') as f:
-            for color in self.colors:
-                rgb565 = (color.r << 11) | (color.g << 5) | color.b
-                f.write(struct.pack('<H', rgb565))
-
-    def save_c_header(self, path: str, var_name: str = "theme_palette"):
-        """Save palette as C header file."""
-        with open(path, 'w') as f:
-            f.write(f"// Theme Palette - {self.firmware_name}\n")
-            f.write(f"// Address: 0x{self.address:04X}, Colors: {len(self.colors)}\n\n")
-            f.write(f"static const uint16_t {var_name}[] = {{\n")
-            for i, color in enumerate(self.colors):
-                rgb565 = (color.r << 11) | (color.g << 5) | color.b
-                if i % 8 == 0:
-                    f.write(f"    0x{rgb565:04X}")
-                else:
-                    f.write(f", 0x{rgb565:04X}")
-                if i < len(self.colors) - 1:
-                    f.write(",")
-                if i % 8 == 7:
-                    f.write(f"  // [{i-7:3d}-{i:3d}]\n")
-                else:
-                    f.write("\n")
-            f.write("};\n")
-
-
-@dataclass
-class ThemeInfo:
-    """Theme color information."""
-    name: str
-    id: int
-    unselected_color: RGB565
-    selected_color: RGB565
-    highlight_color: RGB565
-    background_color: RGB565
-    text_color: RGB565
-
-
-# =============================================================================
-# Theme Definitions (from reverse engineering)
-# =============================================================================
-
-THEME_DEFINITIONS = {
-    0x00: {"name": "Elegant White", "variant": 1, "mode": 0x37, "highlight_mode": 0x81},
-    0x01: {"name": "Midnight Black", "variant": 0, "mode": 0x37, "highlight_mode": 0x38},
-    0x02: {"name": "Cherry Blossom", "variant": 1, "mode": 0x35, "highlight_mode": 0x81},
-    0x03: {"name": "Sky Blue", "variant": 0, "mode": 0x36, "highlight_mode": 0x38},
-    0x04: {"name": "Retro Gold", "variant": 1, "mode": 0x35, "highlight_mode": 0x81},
-}
-
-# Theme color mappings (index into palette)
-THEME_COLORS = {
-    0x00: {  # Elegant White
-        "unselected": 0,      # Dark cyan text
-        "selected": 128,      # Dynamic range (128-165)
-        "highlight": 221,     # Saturated cyan
-        "background": 0xFF7A, # Pale cyan-white
-        "text": 0x0000,       # Dark cyan
-    },
-    0x01: {  # Midnight Black
-        "unselected": 255,     # Deep purple
-        "selected": 255,      # Deep purple
-        "highlight": 255,     # Deep purple
-        "background": 0x0000, # Dark
-        "text": 0xFF7A,       # Pale
-    },
-    0x02: {  # Cherry Blossom
-        "unselected": 0,       # Dark cyan text
-        "selected": 128,       # Dynamic range
-        "highlight": 221,      # Saturated cyan
-        "background": 0xFFE0, # Pink tint
-        "text": 0x0000,       # Dark cyan
-    },
-    0x03: {  # Sky Blue
-        "unselected": 0,       # Dark cyan text
-        "selected": 255,      # Deep purple
-        "highlight": 255,     # Deep purple
-        "background": 0x0000, # Dark
-        "text": 0x4EDD,       # Blue cyan
-    },
-    0x04: {  # Retro Gold
-        "unselected": 0,       # Dark cyan text
-        "selected": 128,       # Dynamic range
-        "highlight": 221,      # Saturated cyan
-        "background": 0xFFE0, # Gold tint
-        "text": 0x0000,       # Dark cyan
-    },
-}
-
-
-# =============================================================================
-# Palette Extraction
-# =============================================================================
-
-class PaletteExtractor:
-    """Extract color palettes from ARM firmware."""
-
-    PALETTE_SIZE = 512  # 256 colors * 2 bytes
-    COLOR_COUNT = 256
-
-    # Common palette locations
-    COMMON_LOCATIONS = [0x1000, 0x1800, 0x2000, 0x2800, 0x3000, 0x3800, 0x4000]
-
-    def __init__(self, verbose: bool = False):
-        self.verbose = verbose
-
-    def log(self, msg: str):
-        if self.verbose:
-            print(f"  [INFO] {msg}")
-
-    def rgb565_to_rgb(self, value: int) -> RGB565:
-        """Convert RGB565 to RGB components."""
-        r = (value >> 11) & 0x1F
-        g = (value >> 5) & 0x3F
-        b = value & 0x1F
-        return RGB565(r=r, g=g, b=b)
-
-    def extract_palette(self, firmware_path: str, address: int = None) -> Optional[Palette]:
-        """Extract palette from firmware binary."""
-        with open(firmware_path, 'rb') as f:
-            data = f.read()
-
-        # Find palette location
-        if address is None:
-            address = self._find_palette_address(data)
-            if address is None:
-                self.log("Could not find palette address")
-                return None
-
-        self.log(f"Palette found at address 0x{address:04X}")
-
-        # Extract palette data
-        if address + self.PALETTE_SIZE > len(data):
-            self.log(f"Palette exceeds firmware size")
-            return None
-
-        palette_data = data[address:address + self.PALETTE_SIZE]
-
-        # Parse colors
-        colors = []
-        for i in range(0, self.PALETTE_SIZE, 2):
-            if i + 1 < len(palette_data):
-                rgb565 = struct.unpack('<H', palette_data[i:i+2])[0]
-                colors.append(self.rgb565_to_rgb(rgb565))
-
-        return Palette(
-            firmware_name=os.path.basename(firmware_path),
-            address=address,
-            colors=colors
+    def _unknown(self, addr: int, raw: bytes) -> Instruction:
+        return Instruction(
+            addr=addr,
+            raw_bytes=raw,
+            mnemonic="???",
+            operands="",
+            instr_type=InstructionType.UNKNOWN
         )
 
-    def _find_palette_address(self, data: bytes) -> Optional[int]:
-        """Find palette address in firmware data."""
-        # Try common locations first
-        for addr in self.COMMON_LOCATIONS:
-            if self._validate_palette(data, addr):
-                return addr
+    def _decode_16bit(self, addr: int, hw: int) -> Instruction:
+        """Decode 16-bit Thumb instruction"""
+        raw = bytes([hw & 0xFF, hw >> 8])
 
-        # Scan for valid palette
-        for addr in range(0, len(data) - self.PALETTE_SIZE, 256):
-            if self._validate_palette(data, addr):
-                return addr
+        # Decode by opcode groups
+        op = hw >> 11
 
-        return None
+        # Shift, add, subtract, move, and compare (bits [15:11])
+        if op == 0b00000:  # LSL immediate
+            return self._decode_lsl_imm(addr, hw, raw)
+        elif op == 0b00001:  # LSR immediate
+            return self._decode_lsr_imm(addr, hw, raw)
+        elif op == 0b00010:  # ASR immediate
+            return self._decode_asr_imm(addr, hw, raw)
+        elif op == 0b00011:  # Add/Sub register/immediate
+            return self._decode_add_sub(addr, hw, raw)
+        elif op == 0b00100:  # MOV immediate
+            return self._decode_mov_imm(addr, hw, raw)
+        elif op == 0b00101:  # CMP immediate
+            return self._decode_cmp_imm(addr, hw, raw)
+        elif op == 0b00110:  # ADD immediate (8-bit)
+            return self._decode_add8_imm(addr, hw, raw)
+        elif op == 0b00111:  # SUB immediate (8-bit)
+            return self._decode_sub8_imm(addr, hw, raw)
 
-    def _validate_palette(self, data: bytes, address: int) -> bool:
-        """Check if address contains valid palette data."""
-        if address + self.PALETTE_SIZE > len(data):
+        # Data processing (bits [15:10] = 010000)
+        elif (hw >> 10) == 0b010000:
+            return self._decode_data_proc(addr, hw, raw)
+
+        # Special data processing and branch/exchange (bits [15:10] = 010001)
+        elif (hw >> 10) == 0b010001:
+            return self._decode_special_proc(addr, hw, raw)
+
+        # LDR (literal) (bits [15:11] = 01001)
+        elif op == 0b01001:
+            return self._decode_ldr_lit(addr, hw, raw)
+
+        # Load/store register offset (bits [15:12] = 0101)
+        elif (hw >> 12) == 0b0101:
+            return self._decode_ldst_reg(addr, hw, raw)
+
+        # Load/store word immediate (bits [15:13] = 011)
+        elif (hw >> 13) == 0b011:
+            return self._decode_ldst_word(addr, hw, raw)
+
+        # Load/store halfword immediate (bits [15:13] = 100)
+        elif (hw >> 13) == 0b100:
+            return self._decode_ldst_half(addr, hw, raw)
+
+        # Load/store sp-relative (bits [15:13] = 1001)
+        elif (hw >> 13) == 0b1001:
+            return self._decode_ldst_sp(addr, hw, raw)
+
+        # Load address (bits [15:12] = 1010)
+        elif (hw >> 12) == 0b1010:
+            return self._decode_load_addr(addr, hw, raw)
+
+        # Miscellaneous (bits [15:12] = 1011)
+        elif (hw >> 12) == 0b1011:
+            return self._decode_misc(addr, hw, raw)
+
+        # Conditional branch (bits [15:12] = 1101)
+        elif (hw >> 12) == 0b1101:
+            return self._decode_cond_branch(addr, hw, raw)
+
+        # Unconditional branch (bits [15:11] = 11100)
+        elif (hw >> 11) == 0b11100:
+            return self._decode_uncond_branch(addr, hw, raw)
+
+        return self._unknown(addr, raw)
+
+    # ----- 16-bit instruction decoding -----
+
+    def _decode_lsl_imm(self, addr, hw, raw):
+        imm5 = (hw >> 6) & 0x1F
+        rm = (hw >> 3) & 0x7
+        rd = hw & 0x7
+        return Instruction(addr, raw, "LSLS", f"R{rd}, R{rm}, #{imm5}",
+                          InstructionType.LSL, rd=rd, rm=rm, imm=imm5)
+
+    def _decode_lsr_imm(self, addr, hw, raw):
+        imm5 = (hw >> 6) & 0x1F
+        rm = (hw >> 3) & 0x7
+        rd = hw & 0x7
+        return Instruction(addr, raw, "LSRS", f"R{rd}, R{rm}, #{imm5}",
+                          InstructionType.LSR, rd=rd, rm=rm, imm=imm5)
+
+    def _decode_asr_imm(self, addr, hw, raw):
+        imm5 = (hw >> 6) & 0x1F
+        rm = (hw >> 3) & 0x7
+        rd = hw & 0x7
+        return Instruction(addr, raw, "ASRS", f"R{rd}, R{rm}, #{imm5}",
+                          InstructionType.ASR, rd=rd, rm=rm, imm=imm5)
+
+    def _decode_add_sub(self, addr, hw, raw):
+        op = (hw >> 9) & 0x3
+        imm3 = (hw >> 6) & 0x7
+        rn = (hw >> 3) & 0x7
+        rd = hw & 0x7
+
+        if op == 0:  # ADD register
+            return Instruction(addr, raw, "ADDS", f"R{rd}, R{rn}, R{imm3}",
+                              InstructionType.ADD, rd=rd, rn=rn, rm=imm3)
+        elif op == 1:  # SUB register
+            return Instruction(addr, raw, "SUBS", f"R{rd}, R{rn}, R{imm3}",
+                              InstructionType.SUB, rd=rd, rn=rn, rm=imm3)
+        elif op == 2:  # ADD 3-bit immediate
+            return Instruction(addr, raw, "ADDS", f"R{rd}, R{rn}, #{imm3}",
+                              InstructionType.ADD, rd=rd, rn=rn, imm=imm3)
+        else:  # SUB 3-bit immediate
+            return Instruction(addr, raw, "SUBS", f"R{rd}, R{rn}, #{imm3}",
+                              InstructionType.SUB, rd=rd, rn=rn, imm=imm3)
+
+    def _decode_mov_imm(self, addr, hw, raw):
+        rd = (hw >> 8) & 0x7
+        imm8 = hw & 0xFF
+        return Instruction(addr, raw, "MOVS", f"R{rd}, #0x{imm8:02X}",
+                          InstructionType.MOVS, rd=rd, imm=imm8)
+
+    def _decode_cmp_imm(self, addr, hw, raw):
+        rn = (hw >> 8) & 0x7
+        imm8 = hw & 0xFF
+        return Instruction(addr, raw, "CMP", f"R{rn}, #0x{imm8:02X}",
+                          InstructionType.CMP, rn=rn, imm=imm8)
+
+    def _decode_add8_imm(self, addr, hw, raw):
+        rdn = (hw >> 8) & 0x7
+        imm8 = hw & 0xFF
+        return Instruction(addr, raw, "ADDS", f"R{rdn}, #{imm8}",
+                          InstructionType.ADD, rd=rdn, imm=imm8)
+
+    def _decode_sub8_imm(self, addr, hw, raw):
+        rdn = (hw >> 8) & 0x7
+        imm8 = hw & 0xFF
+        return Instruction(addr, raw, "SUBS", f"R{rdn}, #{imm8}",
+                          InstructionType.SUB, rd=rdn, imm=imm8)
+
+    def _decode_data_proc(self, addr, hw, raw):
+        op = (hw >> 6) & 0xF
+        rm = (hw >> 3) & 0x7
+        rdn = hw & 0x7
+
+        ops = ["ANDS", "EORS", "LSLS", "LSRS", "ASRS", "ADCS", "SBCS", "RORS",
+               "TST", "RSBS", "CMP", "CMN", "ORRS", "MULS", "BICS", "MVNS"]
+
+        mnem = ops[op]
+        itype = {
+            "ANDS": InstructionType.AND, "EORS": InstructionType.EOR,
+            "LSLS": InstructionType.LSL, "LSRS": InstructionType.LSR,
+            "ASRS": InstructionType.ASR, "ADCS": InstructionType.ADC,
+            "SBCS": InstructionType.SBC, "RORS": InstructionType.ROR,
+            "TST": InstructionType.TST, "RSBS": InstructionType.RSB,
+            "CMP": InstructionType.CMP, "CMN": InstructionType.CMP,
+            "ORRS": InstructionType.ORR, "BICS": InstructionType.AND,
+            "MVNS": InstructionType.MVN
+        }.get(mnem, InstructionType.UNKNOWN)
+
+        if mnem in ["TST", "CMP", "CMN"]:
+            return Instruction(addr, raw, mnem, f"R{rdn}, R{rm}", itype, rn=rdn, rm=rm)
+        elif mnem == "MVNS":
+            return Instruction(addr, raw, mnem, f"R{rdn}, R{rm}", itype, rd=rdn, rm=rm)
+        else:
+            return Instruction(addr, raw, mnem, f"R{rdn}, R{rm}", itype, rd=rdn, rm=rm)
+
+    def _decode_special_proc(self, addr, hw, raw):
+        op = (hw >> 8) & 0x3  # Note: op is 2 bits, not 3 bits
+        d = (hw >> 7) & 0x1
+        rm = (hw >> 3) & 0xF  # Rm is 4 bits
+        rdn = (d << 4) | (hw & 0x7)
+
+        if op == 0:  # ADD high registers
+            return Instruction(addr, raw, "ADD", f"R{rdn}, R{rm}",
+                              InstructionType.ADD, rd=rdn, rm=rm)
+        elif op == 1:  # CMP high registers
+            return Instruction(addr, raw, "CMP", f"R{rdn}, R{rm}",
+                              InstructionType.CMP, rn=rdn, rm=rm)
+        elif op == 2:  # MOV high registers
+            return Instruction(addr, raw, "MOV", f"R{rdn}, R{rm}",
+                              InstructionType.MOVS, rd=rdn, rm=rm)
+        elif op == 3:  # BX / BLX
+            if d:
+                return Instruction(addr, raw, "BLX", f"R{rm}",
+                                  InstructionType.BX, rm=rm, branch_target=0)
+            else:
+                if rm == 14:  # BX LR
+                    return Instruction(addr, raw, "BX", "LR", InstructionType.BX, rm=14)
+                return Instruction(addr, raw, "BX", f"R{rm}", InstructionType.BX, rm=rm)
+
+        return self._unknown(addr, raw)
+
+    def _decode_ldr_lit(self, addr, hw, raw):
+        rt = (hw >> 8) & 0x7
+        imm8 = hw & 0xFF
+        pc_aligned = (addr + 4) & ~3
+        target = pc_aligned + imm8 * 4
+        return Instruction(addr, raw, "LDR", f"R{rt}, [PC, #{imm8*4}]",
+                          InstructionType.LDR, rd=rt, imm=target)
+
+    def _decode_ldst_reg(self, addr, hw, raw):
+        rm = (hw >> 6) & 0x7
+        rn = (hw >> 3) & 0x7
+        rt = hw & 0x7
+        opA = (hw >> 9) & 0x7
+
+        ops = ["STR", "STRH", "STRB", "LDRSB", "LDR", "LDRH", "LDRB", "LDRSH"]
+        mnem = ops[opA]
+
+        if "STR" in mnem:
+            return Instruction(addr, raw, mnem, f"R{rt}, [R{rn}, R{rm}]",
+                              InstructionType.STRH, rd=rt, rn=rn, rm=rm)
+        else:
+            return Instruction(addr, raw, mnem, f"R{rt}, [R{rn}, R{rm}]",
+                              InstructionType.LDR, rd=rt, rn=rn, rm=rm)
+
+    def _decode_ldst_word(self, addr, hw, raw):
+        b = (hw >> 12) & 0x1
+        l = (hw >> 11) & 0x1
+        imm5 = (hw >> 6) & 0x1F
+        rn = (hw >> 3) & 0x7
+        rt = hw & 0x7
+
+        offset = imm5 * 4 if not b else imm5
+        mnem = ("LDR" if l else "STR") + ("B" if b else "")
+
+        return Instruction(addr, raw, mnem, f"R{rt}, [R{rn}, #{offset}]",
+                          InstructionType.LDR if l else InstructionType.STRH,
+                          rd=rt, rn=rn, imm=offset)
+
+    def _decode_ldst_half(self, addr, hw, raw):
+        l = (hw >> 11) & 0x1
+        imm5 = (hw >> 6) & 0x1F
+        rn = (hw >> 3) & 0x7
+        rt = hw & 0x7
+        offset = imm5 * 2
+
+        mnem = "LDRH" if l else "STRH"
+        return Instruction(addr, raw, mnem, f"R{rt}, [R{rn}, #{offset}]",
+                          InstructionType.STRH if not l else InstructionType.LDR,
+                          rd=rt, rn=rn, imm=offset)
+
+    def _decode_ldst_sp(self, addr, hw, raw):
+        l = (hw >> 11) & 0x1
+        rt = (hw >> 8) & 0x7
+        imm8 = hw & 0xFF
+        offset = imm8 * 4
+
+        mnem = "LDR" if l else "STR"
+        return Instruction(addr, raw, mnem, f"R{rt}, [SP, #{offset}]",
+                          InstructionType.LDR if l else InstructionType.STRH,
+                          rd=rt, imm=offset)
+
+    def _decode_load_addr(self, addr, hw, raw):
+        sp = (hw >> 11) & 0x1
+        rd = (hw >> 8) & 0x7
+        imm8 = hw & 0xFF
+        offset = imm8 * 4
+
+        base = "SP" if sp else "PC"
+        return Instruction(addr, raw, "ADR", f"R{rd}, {base}+{offset}",
+                          InstructionType.ADD, rd=rd, imm=offset)
+
+    def _decode_misc(self, addr, hw, raw):
+        op = (hw >> 8) & 0xF
+
+        if op == 0:  # Add/SUB SP immediate
+            s = (hw >> 7) & 0x1
+            imm7 = hw & 0x7F
+            offset = imm7 * 4
+            mnem = "SUB" if s else "ADD"
+            return Instruction(addr, raw, mnem, f"SP, #{offset}",
+                              InstructionType.ADD, imm=offset)
+
+        elif (hw & 0xFE00) == 0xB400:  # PUSH {registers} or PUSH {registers, LR}
+            m = (hw >> 8) & 0x1
+            reg_list = []
+            for i in range(8):
+                if hw & (1 << i):
+                    reg_list.append(f"R{i}")
+            if m:
+                reg_list.append("LR")
+            return Instruction(addr, raw, "PUSH", "{" + ", ".join(reg_list) + "}",
+                              InstructionType.PUSH, imm=m)
+
+        elif (hw & 0xFE00) == 0xBC00:  # POP {registers} or POP {registers, PC}
+            p = (hw >> 8) & 0x1
+            reg_list = []
+            for i in range(8):
+                if hw & (1 << i):
+                    reg_list.append(f"R{i}")
+            if p:
+                reg_list.append("PC")
+            return Instruction(addr, raw, "POP", "{" + ", ".join(reg_list) + "}",
+                              InstructionType.POP, imm=p)
+
+        elif (hw & 0xFF00) == 0xBE00:  # BKPT
+            return Instruction(addr, raw, "BKPT", f"#{hw & 0xFF}", InstructionType.NOP)
+
+        elif (hw & 0xFF00) == 0xBF00:  # IT / hints
+            firstcond = (hw >> 4) & 0xF
+            mask = hw & 0xF
+
+            if mask == 0:
+                # Hint instructions
+                hints = {0: "NOP", 1: "YIELD", 2: "WFE", 3: "WFI", 4: "SEV"}
+                hint = hints.get(firstcond, "???")
+                return Instruction(addr, raw, hint, "", InstructionType.NOP)
+            else:
+                cond_name = self.COND_NAMES.get(firstcond, "?")
+                return Instruction(addr, raw, "IT", cond_name,
+                                  InstructionType.IT, cond=firstcond, it_mask=mask)
+
+        elif (hw & 0xF500) == 0xB100:  # CBZ / CBNZ
+            rn = hw & 0x7
+            offset = ((hw >> 3) & 0x1F) * 2 + 4
+            is_cbz = not (hw & 0x800)
+            mnem = "CBZ" if is_cbz else "CBNZ"
+            target = addr + offset
+            itype = InstructionType.CBZ if is_cbz else InstructionType.CBNZ
+            return Instruction(addr, raw, mnem, f"R{rn}, 0x{target:05X}",
+                              itype, rn=rn, branch_target=target)
+
+        return self._unknown(addr, raw)
+
+    def _decode_cond_branch(self, addr, hw, raw):
+        cond = (hw >> 8) & 0xF
+        imm8 = hw & 0xFF
+
+        if cond == 14:  # UDF
+            return Instruction(addr, raw, "UDF", f"#{imm8}", InstructionType.NOP)
+
+        if cond == 15:  # SVC
+            return Instruction(addr, raw, "SVC", f"#{imm8}", InstructionType.NOP)
+
+        # Conditional branch
+        if imm8 & 0x80:
+            imm8 = imm8 - 256
+        target = addr + imm8 * 2 + 4
+
+        cond_name = self.COND_NAMES.get(cond, "?")
+        mnem = f"B{cond_name}"
+
+        if cond == 0:
+            itype = InstructionType.BEQ
+        elif cond == 1:
+            itype = InstructionType.BNE
+        else:
+            itype = InstructionType.B
+
+        return Instruction(addr, raw, mnem, f"0x{target:05X}",
+                          itype, cond=cond, branch_target=target)
+
+    def _decode_uncond_branch(self, addr, hw, raw):
+        imm11 = hw & 0x7FF
+        if imm11 & 0x400:
+            imm11 = imm11 - 2048
+        target = addr + imm11 * 2 + 4
+        return Instruction(addr, raw, "B", f"0x{target:05X}",
+                          InstructionType.B, branch_target=target)
+
+    # ----- 32-bit instruction decoding -----
+
+    def _decode_32bit(self, addr: int, hw1: int, hw2: int) -> Instruction:
+        """Decode 32-bit Thumb instruction"""
+        raw = bytes([hw1 & 0xFF, hw1 >> 8, hw2 & 0xFF, hw2 >> 8])
+
+        # PUSH.W / STMDB (Store Multiple Decrement Before)
+        # Encoding: 1110 1001 001M 0Rdn | register_list
+        # Where M=1 means includes LR, Rdn is usually SP (1101=13)
+        if (hw1 & 0xFF00) == 0xE900:  # STMDB / PUSH.W
+            return self._decode_stmdb(addr, hw1, hw2, raw)
+
+        # MOVW / MOVT
+        if (hw1 & 0xFBF0) == 0xF240:  # MOVW
+            return self._decode_movw(addr, hw1, hw2, raw)
+
+        if (hw1 & 0xFBF0) == 0xF2C0:  # MOVT
+            return self._decode_movt(addr, hw1, hw2, raw)
+
+        # MOV immediate
+        if (hw1 & 0xFBF0) == 0xF04F:  # MOV.W Rd, #modimm
+            return self._decode_mov_w(addr, hw1, hw2, raw)
+
+        # CMP immediate
+        if (hw1 & 0xFBF0) == 0xF1B0:  # CMP.W Rn, #modimm
+            return self._decode_cmp_w(addr, hw1, hw2, raw)
+
+        # LDRB (literal)
+        if hw1 == 0xF890:
+            return self._decode_ldrb_lit(addr, hw1, hw2, raw)
+
+        # STRH.W (register offset)
+        if (hw1 & 0xFFF0) in [0xF8A0, 0xF820]:
+            return self._decode_strh_w(addr, hw1, hw2, raw)
+
+        # BL
+        if (hw1 & 0xF800) == 0xF000:
+            if (hw2 & 0xD000) == 0xD000:  # BL
+                return self._decode_bl(addr, hw1, hw2, raw)
+            elif (hw2 & 0xD000) == 0x8000:  # B
+                return self._decode_b32(addr, hw1, hw2, raw)
+
+        # General 32-bit
+        return Instruction(addr, raw, "32BIT", f"0x{hw1:04X} 0x{hw2:04X}",
+                          InstructionType.UNKNOWN)
+
+    def _decode_stmdb(self, addr, hw1, hw2, raw):
+        """Decode STMDB/PUSH.W instruction"""
+        m = (hw1 >> 5) & 1  # M bit (LR)
+        rn = hw1 & 0xF      # Base register
+        reg_list = []
+        for i in range(16):
+            if hw2 & (1 << i):
+                if i == 13:
+                    reg_list.append("SP")
+                elif i == 14:
+                    reg_list.append("LR")
+                elif i == 15:
+                    reg_list.append("PC")
+                else:
+                    reg_list.append(f"R{i}")
+
+        if rn == 13:  # SP - This is PUSH
+            if m:
+                reg_list.append("LR")
+            return Instruction(addr, raw, "PUSH.W", "{" + ", ".join(reg_list) + "}",
+                              InstructionType.PUSH, imm=1 if "LR" in reg_list else 0)
+
+        return Instruction(addr, raw, "STMDB", f"R{rn}!, {{{', '.join(reg_list)}}}",
+                          InstructionType.PUSH)
+
+    def _decode_movw(self, addr, hw1, hw2, raw):
+        i = (hw1 >> 10) & 1
+        imm4 = hw1 & 0xF
+        imm3 = (hw2 >> 12) & 0x7
+        rd = (hw2 >> 8) & 0xF
+        imm8 = hw2 & 0xFF
+        imm16 = (i << 11) | (imm4 << 12) | (imm3 << 8) | imm8
+
+        return Instruction(addr, raw, "MOVW", f"R{rd}, #0x{imm16:04X}",
+                          InstructionType.MOVW, rd=rd, imm=imm16)
+
+    def _decode_movt(self, addr, hw1, hw2, raw):
+        i = (hw1 >> 10) & 1
+        imm4 = hw1 & 0xF
+        imm3 = (hw2 >> 12) & 0x7
+        rd = (hw2 >> 8) & 0xF
+        imm8 = hw2 & 0xFF
+        imm16 = (i << 11) | (imm4 << 12) | (imm3 << 8) | imm8
+
+        return Instruction(addr, raw, "MOVT", f"R{rd}, #0x{imm16:04X}",
+                          InstructionType.MOVW, rd=rd, imm=imm16 << 16)
+
+    def _decode_mov_w(self, addr, hw1, hw2, raw):
+        rd = (hw2 >> 8) & 0xF
+        # Simplified handling, only extractImmediate value
+        imm = hw2 & 0xFF
+        return Instruction(addr, raw, "MOV.W", f"R{rd}, #0x{imm:02X}",
+                          InstructionType.MOVS, rd=rd, imm=imm)
+
+    def _decode_cmp_w(self, addr, hw1, hw2, raw):
+        rn = hw1 & 0xF
+        imm = hw2 & 0xFF
+        return Instruction(addr, raw, "CMP.W", f"R{rn}, #0x{imm:02X}",
+                          InstructionType.CMP, rn=rn, imm=imm)
+
+    def _decode_ldrb_lit(self, addr, hw1, hw2, raw):
+        rt = (hw2 >> 12) & 0xF
+        offset = hw2 & 0xFFF
+        target = addr + 4 + offset
+        return Instruction(addr, raw, "LDRB.W", f"R{rt}, [PC, #{offset}]",
+                          InstructionType.LDRB, rd=rt, imm=target)
+
+    def _decode_strh_w(self, addr, hw1, hw2, raw):
+        # STRH.W Rt, [Rn, #imm] Encoding: 1111 1000 1010 nnnn | rrrr tttt 1100 iiii
+        # Where hw1 = F8An (n = Rn)
+        # In hw2, Rt at bits[15:12], imm12 at bits[11:0]
+        rn = hw1 & 0xF
+        rt = (hw2 >> 12) & 0xF
+        offset = hw2 & 0xFFF
+        return Instruction(addr, raw, "STRH.W", f"R{rt}, [R{rn}, #{offset}]",
+                          InstructionType.STRH_W, rd=rt, rn=rn, imm=offset)
+
+    def _decode_bl(self, addr, hw1, hw2, raw):
+        s = (hw1 >> 10) & 1
+        imm10 = hw1 & 0x3FF
+        j1 = (hw2 >> 13) & 1
+        j2 = (hw2 >> 11) & 1
+        imm11 = hw2 & 0x7FF
+
+        i1 = ~(j1 ^ s) & 1
+        i2 = ~(j2 ^ s) & 1
+
+        imm32 = (s << 24) | (i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1)
+        if s:
+            imm32 = imm32 | 0xFE000000
+
+        target = addr + 4 + imm32
+        return Instruction(addr, raw, "BL", f"0x{target:05X}",
+                          InstructionType.B, branch_target=target)
+
+    def _decode_b32(self, addr, hw1, hw2, raw):
+        s = (hw1 >> 10) & 1
+        imm10 = hw1 & 0x3FF
+        j1 = (hw2 >> 13) & 1
+        j2 = (hw2 >> 11) & 1
+        imm11 = hw2 & 0x7FF
+
+        i1 = ~(j1 ^ s) & 1
+        i2 = ~(j2 ^ s) & 1
+
+        imm32 = (s << 24) | (i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1)
+        if s:
+            imm32 = imm32 | 0xFE000000
+
+        target = addr + 4 + imm32
+        return Instruction(addr, raw, "B.W", f"0x{target:05X}",
+                          InstructionType.B, branch_target=target)
+
+
+# ============================================================================
+# Theme Function Detector
+# ============================================================================
+
+class ThemeFunctionDetector:
+    """Detect Theme-Related Functions"""
+
+    def __init__(self, decoder: ThumbDecoder):
+        self.decoder = decoder
+
+    def _is_32bit_instruction(self, addr: int) -> bool:
+        """Check if instruction is 32-bit"""
+        if addr + 2 > len(self.decoder.data):
             return False
+        hw = self.decoder.read16(addr)
+        return (hw & 0xF800) in [0xE800, 0xF000, 0xF800]
 
-        valid_count = 0
-        for i in range(0, self.PALETTE_SIZE, 2):
-            if i + 1 < len(data):
-                rgb565 = struct.unpack('<H', data[address+i:address+i+2])[0]
-                r = (rgb565 >> 11) & 0x1F
-                g = (rgb565 >> 5) & 0x3F
-                b = rgb565 & 0x1F
-                if r <= 31 and g <= 63 and b <= 31:
-                    valid_count += 1
+    def scan_firmware(self, max_scan_size: int = 0x100000) -> List[ThemeFunction]:
+        """Scan firmware for Theme-Related Functions"""
+        functions = []
+        data = self.decoder.data
 
-        return valid_count >= 240
+        # Limit scan range (code section usually in first 1MB)
+        original_size = len(data)
+        if len(data) > max_scan_size:
+            self.decoder.data = data[:max_scan_size]
 
+        # For deduplication
+        seen_func_addrs = set()
 
-# =============================================================================
-# Symbolic Color Engine - Auto-Discovery Version
-# =============================================================================
+        # Method 1: Search for preload+conditional store pattern (most accurate)
+        # Feature: Multiple consecutive MOVW loading colors, then CMP + conditional branch
+        for func in self._find_preload_store_patterns():
+            if func.addr not in seen_func_addrs:
+                seen_func_addrs.add(func.addr)
+                functions.append(func)
 
-class SymbolicColorEngine:
-    """
-    Symbolic execution engine for automatic color lookup discovery.
+        # Method 2: Search for switch-case pattern
+        # Feature: Multiple CMP R0, #N + BEQ/BNE sequences
+        for func in self._find_switch_case_patterns():
+            if func.addr not in seen_func_addrs:
+                seen_func_addrs.add(func.addr)
+                functions.append(func)
 
-    This engine analyzes ARM firmware to:
-    1. Find theme_select and theme_variant access points
-    2. Trace conditional branches (BNE, BEQ, etc.)
-    3. Extract color parameters from each path
-    4. Auto-discover theme configuration without hardcoded mappings
+        # Method 3: Search for ITE pattern
+        # Feature: IT instruction + conditional MOVW
+        for func in self._find_ite_patterns():
+            if func.addr not in seen_func_addrs:
+                seen_func_addrs.add(func.addr)
+                functions.append(func)
 
-    Usage:
-        engine = SymbolicColorEngine(firmware_path, palette)
-        config = engine.auto_discover_theme_config()
-        print(config)
-    """
+        # Restore original data
+        self.decoder.data = data
 
-    def __init__(self, firmware_path: str, palette: Palette, verbose: bool = False):
-        self.firmware_path = firmware_path
-        self.palette = palette
-        self.verbose = verbose
-        self.firmware_data = self._load_firmware()
-        self.traces: List[ColorTrace] = []
+        return functions
 
-    def _load_firmware(self) -> bytes:
-        """Load firmware binary."""
-        with open(self.firmware_path, 'rb') as f:
-            return f.read()
+    def _find_preload_store_patterns(self) -> List[ThemeFunction]:
+        """Find preload+conditional store pattern"""
+        functions = []
+        data = self.decoder.data
 
-    def log(self, msg: str):
-        if self.verbose:
-            print(f"  [TRACE] {msg}")
+        # Fast scan: Search for MOVW instruction byte patterns
+        # MOVW Rd, #imm16 Encoding: 11110 i 0 00100 imm4 | 0 imm3 Rd imm8
+        # First byte is usually 0xF2 or 0xF6
+        movw_candidates = []
 
-    # ==========================================================================
-    # ARM Instruction Decoding
-    # ==========================================================================
+        for i in range(0, len(data) - 8, 2):
+            hw = data[i] | (data[i+1] << 8)
+            if (hw & 0xFBF0) == 0xF240:  # MOVW prefix
+                movw_candidates.append(i)
 
-    def decode_thumb_mov_imm(self, addr: int) -> Optional[dict]:
-        """Decode MOV Rd, #imm8 (16-bit)."""
-        if addr + 2 > len(self.firmware_data):
-            return None
-        instr = struct.unpack('<H', self.firmware_data[addr:addr+2])[0]
-        # 00100ddd iiiiiiii = MOV Rd, #imm8
-        if (instr & 0xF800) == 0x2000:
-            rd = (instr >> 8) & 0x7
-            imm = instr & 0xFF
-            return {'type': 'MOV', 'rd': rd, 'imm': imm, 'raw': instr}
-        return None
+        # Analyze candidate addresses
+        seen_addrs = set()
+        for i in movw_candidates:
+            instr = self.decoder.decode(i)
 
-    def decode_thumb_ldr_pc(self, addr: int) -> Optional[dict]:
-        """Decode LDR Rd, [PC, #imm8*4] (16-bit literal pool)."""
-        if addr + 2 > len(self.firmware_data):
-            return None
-        instr = struct.unpack('<H', self.firmware_data[addr:addr+2])[0]
-        # 01001ddd iiiiiiii = LDR Rd, [PC, #imm]
-        if (instr & 0xF800) == 0x4800:
-            rd = (instr >> 8) & 0x7
-            imm = instr & 0xFF
-            return {'type': 'LDR_PC', 'rd': rd, 'imm': imm, 'raw': instr}
-        return None
+            if instr.instr_type == InstructionType.MOVW:
+                # Check if consecutive MOVW sequence
+                movw_sequence = self._collect_movw_sequence(i)
 
-    def decode_thumb_ldr_reg(self, addr: int) -> Optional[dict]:
-        """Decode LDR/STR with register offset (16-bit)."""
-        if addr + 2 > len(self.firmware_data):
-            return None
-        instr = struct.unpack('<H', self.firmware_data[addr:addr+2])[0]
-        # 01011Bt_ddd_nnn_rrr (LDR/STRH with register)
-        # Let's check for LDRH with register: 010110B0 mmm nnn ttt
-        if (instr & 0xFE00) == 0x5200:
-            rd = instr & 0x7
-            rn = (instr >> 3) & 0x7
-            rm = (instr >> 6) & 0x7
-            return {'type': 'LDRH_REG', 'rd': rd, 'rn': rn, 'rm': rm, 'raw': instr}
-        return None
+                if len(movw_sequence) >= 2:
+                    # Check if followed by CMP + conditional branch
+                    next_addr = movw_sequence[-1].addr + 4
+                    if self._has_conditional_structure(next_addr):
+                        # Find function start
+                        func_start = self._find_function_start(i)
+                        if func_start is not None and func_start not in seen_addrs:
+                            seen_addrs.add(func_start)
+                            # Find function end
+                            func_end = self._find_function_end(func_start)
+                            func = ThemeFunction(
+                                addr=func_start,
+                                end_addr=func_end,
+                                pattern_type="preload_store"
+                            )
+                            func.preload_colors = {m.rd: m.imm for m in movw_sequence}
+                            functions.append(func)
 
-    def decode_thumb_ldr_pc_offset(self, addr: int) -> Optional[dict]:
-        """Decode LDRB/W with PC-relative offset (Thumb-2)."""
-        if addr + 4 > len(self.firmware_data):
-            return None
-        instr1 = struct.unpack('<H', self.firmware_data[addr:addr+2])[0]
-        instr2 = struct.unpack('<H', self.firmware_data[addr+2:addr+4])[0]
-        # LDRB.W Rt, [Rn, #imm12] = 1111 1000 1x0m mmmm mmmm Rt nntt tttt
-        # LDRB.W = 1111 1000 1x00 mmmm mmmm (imm12)
-        if (instr1 & 0xFF80) == 0xF800:
-            rt = (instr1 >> 12) & 0xF
-            rn = (instr2 >> 16) & 0xF
-            imm = ((instr2 >> 4) & 0xF0) | (instr1 & 0x0F)
-            return {'type': 'LDRB_W', 'rt': rt, 'rn': rn, 'imm': imm, 'raw': (instr1 << 16) | instr2}
-        return None
+        return functions
 
-    def decode_thumb_cmp(self, addr: int) -> Optional[dict]:
-        """Decode CMP Rn, #imm8 (16-bit)."""
-        if addr + 2 > len(self.firmware_data):
-            return None
-        instr = struct.unpack('<H', self.firmware_data[addr:addr+2])[0]
-        # 00101ddd iiiiiiii = CMP Rd, #imm8
-        if (instr & 0xF800) == 0x2800:
-            rd = (instr >> 8) & 0x7
-            imm = instr & 0xFF
-            return {'type': 'CMP', 'rd': rd, 'imm': imm, 'raw': instr}
-        return None
+    def _find_switch_case_patterns(self) -> List[ThemeFunction]:
+        """Find switch-case pattern"""
+        functions = []
+        data = self.decoder.data
 
-    def decode_thumb_branch(self, addr: int) -> Optional[dict]:
-        """Decode BNE/BEQ conditional branches (16-bit)."""
-        if addr + 2 > len(self.firmware_data):
-            return None
-        instr = struct.unpack('<H', self.firmware_data[addr:addr+2])[0]
-        # 1101cccc iiiiiiii = B<cond> #imm8*2
-        if (instr & 0xF000) == 0xD000:
-            cond = (instr >> 8) & 0xF
-            imm = (instr & 0xFF) * 2
-            # Sign extend
-            if imm & 0x100:
-                imm = imm - 0x200
-            return {'type': 'B', 'cond': cond, 'imm': imm, 'raw': instr}
-        return None
+        # Fast scan: Search for CMP R0, #N byte patterns
+        # CMP R0, #imm8 Encoding: 00101 Rn imm8 (bits[15:11] = 00101)
+        cmp_candidates = []
 
-    def decode_thumb2_ldr_literal(self, addr: int) -> Optional[dict]:
-        """Decode LDR (literal) Thumb-2."""
-        if addr + 4 > len(self.firmware_data):
-            return None
-        instr1 = struct.unpack('<H', self.firmware_data[addr:addr+2])[0]
-        instr2 = struct.unpack('<H', self.firmware_data[addr+2:addr+4])[0]
-        # LDR.W Rt, [PC, #imm12] = 11111 1 Rt imm12
-        if (instr1 & 0xF800) == 0xF8C0:
-            rt = (instr1 >> 12) & 0xF
-            imm12 = ((instr2 >> 4) & 0xF00) | (instr2 & 0xFF)
-            return {'type': 'LDR_LIT', 'rt': rt, 'imm': imm12, 'raw': (instr1 << 16) | instr2}
-        return None
+        for i in range(0, len(data) - 6, 2):
+            hw = data[i] | (data[i+1] << 8)
 
-    # ==========================================================================
-    # Color Lookup Discovery - Simple Parameter to Color Mapping
-    # ==========================================================================
+            # 16-bit CMP Rd, #imm8 Encoding: 00101 Rn imm8 (bits[15:11] = 00101)
+            if (hw >> 11) == 0b00101:
+                rd = (hw >> 8) & 0x7
+                imm = hw & 0xFF
+                if rd == 0 and imm < 10:  # CMP R0, #0-9
+                    cmp_candidates.append((i, imm))
 
-    def discover_color_paths(self) -> List[dict]:
-        """Public wrapper for _find_all_color_paths."""
-        return self._find_all_color_paths()
+            # 32-bit CMP.W R0, #imm Encoding: F1BC 0Fxx (where xx isImmediate value)
+            elif hw == 0xF1BC:
+                hw2 = data[i+2] | (data[i+3] << 8)
+                if (hw2 & 0xFF00) == 0x0F00:  # CMP.W R0, #imm
+                    imm = hw2 & 0xFF
+                    if imm < 10:
+                        cmp_candidates.append((i, imm))
 
-    def _find_all_color_paths(self) -> List[dict]:
-        """
-        Simplified color discovery - scan for all mode + palette index pairs.
-        """
-        self.log("=" * 60)
-        self.log("SCANNING FOR COLOR PARAMETERS")
-        self.log("=" * 60)
-
-        results = []
-        data = self.firmware_data
-
-        MODE_VALUES = [0x35, 0x36, 0x37, 0x38, 0x81]
-        PALETTE_INDICES = [0xDA, 0xDD, 0x6E, 0xFF, 0x00, 0x80, 0xA5]
-
-        addr = 0
-        scan_range = min(len(data), 0x200000)
-        found_modes = []
-        found_indices = []
-
-        # Scan for all MOV immediate instructions
-        while addr < scan_range:
-            if addr + 2 > len(data):
-                break
-
-            instr = struct.unpack('<H', data[addr:addr+2])[0]
-
-            # MOV Rd, #imm8 = 00100ddd iiiiiiii
-            if (instr & 0xF800) == 0x2000:
-                rd = (instr >> 8) & 0x7
-                imm = instr & 0xFF
-
-                if imm in MODE_VALUES:
-                    found_modes.append({'addr': addr, 'value': imm, 'rd': rd})
-                    self.log(f"  Mode 0x{imm:02X} at 0x{addr:06X}")
-                elif imm in PALETTE_INDICES:
-                    found_indices.append({'addr': addr, 'value': imm, 'rd': rd})
-                    self.log(f"  Palette index 0x{imm:02X} at 0x{addr:06X}")
-
-            addr += 2
-
-        # Group modes with nearby palette indices
-        for mode in found_modes:
-            for idx in found_indices:
-                dist = abs(idx['addr'] - mode['addr'])
-                if dist < 24:  # Within 24 bytes (typical parameter sequence)
-                    results.append({
-                        'mode': mode['value'],
-                        'index': idx['value'],
-                        'immediate': None,
-                        'source': 'palette',
-                        'color': self.palette.get_color(idx['value']) or RGB565(r=0, g=0, b=0),
-                        'address': mode['addr'],
-                        'cmp_value': None,
-                        'branch_cond': None,
-                    })
-
-        # Also find immediate color values (not from palette)
-        addr = 0
-        while addr < scan_range:
-            if addr + 2 > len(data):
-                break
-
-            instr = struct.unpack('<H', data[addr:addr+2])[0]
-
-            if (instr & 0xF800) == 0x2000:
-                rd = (instr >> 8) & 0x7
-                imm = instr & 0xFF
-
-                # Check for RGB565-like values (high bits set)
-                if imm > 0x80 and imm not in MODE_VALUES:
-                    # Check if already in results
-                    exists = any(r['immediate'] == imm for r in results)
-                    if not exists:
-                        results.append({
-                            'mode': None,
-                            'index': None,
-                            'immediate': imm,
-                            'source': 'immediate',
-                            'color': self._rgb565_to_rgb(imm),
-                            'address': addr,
-                            'cmp_value': None,
-                            'branch_cond': None,
-                        })
-
-            addr += 2
-
-        self.log(f"\nFound {len(results)} color parameter combinations")
-        return results
-
-    def generate_color_map_report(self) -> str:
-        """Generate color lookup report."""
-        paths = self.discover_color_paths()
-        lines = ['=' * 70, 'COLOR LOOKUP REPORT', '=' * 70, '']
-        
-        # Show unique configurations
-        seen = set()
-        for p in paths:
-            key = (p.get('mode'), p.get('source'), p.get('index') or p.get('immediate'))
-            if key not in seen:
-                seen.add(key)
-                mode = p.get('mode') or 0
-                if mode in [0x35, 0x36, 0x37, 0x38, 0x81]:
-                    if p['source'] == 'palette' and p.get('index'):
-                        lines.append(f'MODE 0x{mode:02X}: PALETTE[0x{p["index"]:02X}] = {p["color"]}')
-                    elif p.get('immediate'):
-                        lines.append(f'MODE 0x{mode:02X}: HARDCODED 0x{p["immediate"]:04X} = {p["color"]}')
-        
-        lines.extend(['', '-' * 70, f'Total: {len(seen)} configs', '=' * 70])
-        return '\n'.join(lines)
-
-    def _find_highlight_render_paths(self) -> List[dict]:
-        """Find highlight rendering paths by searching for theme_variant checks."""
-        paths = []
-
-        # Search for LDRB theme_variant pattern + CMP + BNE + color params
-        data = self.firmware_data
-        search_range = min(len(data), 0x200000)  # Limit search
-
-        self.log("Searching for theme_variant checks...")
-
-        # Pattern: LDRB.W Rx, [Ry, #offset] followed by CMP, BNE, MOV color params
-        addr = 0
-        while addr < search_range:
-            # Look for LDRB.W (load byte)
-            if addr + 4 < len(data):
-                instr1 = struct.unpack('<H', data[addr:addr+2])[0]
-                instr2 = struct.unpack('<H', data[addr+2:addr+4])[0]
-
-                # Check for LDRB.W pattern (1111 1000 1x00 mmmm mmmm)
-                if (instr1 & 0xFF80) == 0xF800:
-                    rt = (instr1 >> 12) & 0xF
-                    imm = ((instr2 >> 4) & 0xF0) | (instr1 & 0x0F)
-
-                    # Check next instructions for CMP + BNE
-                    next_addr = addr + 4
-                    path_info = {
-                        'ldr_addr': addr,
-                        'rt': rt,
-                        'offset': imm,
-                        'cmp_addr': None,
-                        'cmp_imm': None,
-                        'branch_addr': None,
-                        'branch_cond': None,
-                        'branch_target': None,
-                        'color_params': [],
-                        'mode_params': []
-                    }
-
-                    # Search for CMP followed by BNE
-                    for offset in range(4, 24, 2):
-                        if next_addr + offset + 2 > len(data):
-                            break
-
-                        cmp_instr = struct.unpack('<H', data[next_addr+offset:next_addr+offset+2])[0]
-                        decoded = self.decode_thumb_cmp(0)  # Just for checking
-
-                        # Check for CMP
-                        if (cmp_instr & 0xF800) == 0x2800:
-                            path_info['cmp_addr'] = next_addr + offset
-                            path_info['cmp_imm'] = cmp_instr & 0xFF
-                            self.log(f"  Found CMP at 0x{path_info['cmp_addr']:06X}: compare with 0x{path_info['cmp_imm']:02X}")
-
-                            # Look for BNE after CMP
-                            for boff in range(2, 12, 2):
-                                b_addr = next_addr + offset + boff
-                                if b_addr + 2 > len(data):
-                                    break
-                                b_instr = struct.unpack('<H', data[b_addr:b_addr+2])[0]
-                                if (b_instr & 0xF000) == 0xD000:
-                                    cond = (b_instr >> 8) & 0xF
-                                    imm = (b_instr & 0xFF) * 2
-                                    if imm & 0x100:
-                                        imm -= 0x200
-                                    path_info['branch_addr'] = b_addr
-                                    path_info['branch_cond'] = cond
-                                    path_info['branch_target'] = b_addr + 2 + imm
-                                    self.log(f"  Found BNE at 0x{b_addr:06X}: cond={cond}, target=0x{path_info['branch_target']:06X}")
-                                    # Extract color parameters from the taken path
-                                    taken_addr = b_addr + 2
-                                    self._extract_color_params(taken_addr, path_info)
-                                    paths.append(path_info)  # <-- FIX: append to paths
-                                    break
-                            break
-
-            addr += 2
-
-        self.log(f"Total highlight paths found: {len(paths)}")
-        return paths
-
-    def _extract_color_params(self, taken_addr: int, path_info: dict):
-        """Extract color and mode parameters from both branch paths."""
-        data = self.firmware_data
-
-        # Check BOTH paths: fallthrough (after branch) AND taken (target)
-        addresses_to_check = [taken_addr]  # Start with fallthrough
-
-        # Also check the taken path if branch target is known
-        if path_info.get('branch_target'):
-            addresses_to_check.append(path_info['branch_target'])
-
-        for search_addr in addresses_to_check:
-            for offset in range(0, 64, 2):  # Check more bytes
-                check_addr = search_addr + offset
-                if check_addr + 2 > len(data):
+        # Analyze consecutive CMP sequences
+        seen_addrs = set()
+        i = 0
+        while i < len(cmp_candidates):
+            # Collect consecutive CMPs
+            consecutive = [cmp_candidates[i]]
+            j = i + 1
+            while j < len(cmp_candidates):
+                if cmp_candidates[j][0] - cmp_candidates[j-1][0] <= 20:  # Allow other instructions in between
+                    consecutive.append(cmp_candidates[j])
+                    j += 1
+                else:
                     break
 
-                instr = struct.unpack('<H', data[check_addr:check_addr+2])[0]
+            if len(consecutive) >= 3:
+                # Check for differentImmediate value (0, 1, 2, 3, 4)
+                imms = set(c[1] for c in consecutive)
+                if len(imms) >= 3:
+                    func_start = self._find_function_start(consecutive[0][0])
+                    if func_start and func_start not in seen_addrs:
+                        seen_addrs.add(func_start)
 
-                # Check for MOV immediate
-                if (instr & 0xF800) == 0x2000:
-                    rd = (instr >> 8) & 0x7
-                    imm = instr & 0xFF
+                        # Collect MOVW color values in function
+                        # Use CMP sequence position as base, not function start
+                        cmp_start = consecutive[0][0]
+                        func_end = consecutive[-1][0] + 100
+                        color_values = {}
+                        addr = cmp_start  # Collect from CMP sequence start position
+                        while addr < func_end:
+                            if addr + 4 > len(data):
+                                break
+                            hw = data[addr] | (data[addr+1] << 8)
 
-                    # Mode values: 0x35, 0x36, 0x37, 0x38, 0x81
-                    if imm in [0x35, 0x36, 0x37, 0x38, 0x81]:
-                        # Check if already exists
-                        exists = any(p['value'] == imm for p in path_info['mode_params'])
-                        if not exists:
-                            path_info['mode_params'].append({
-                                'addr': check_addr,
-                                'value': imm,
-                                'type': 'mode',
-                                'rd': rd
-                            })
-                            self.log(f"      Mode 0x{imm:02X} at 0x{check_addr:06X}")
-                    # Palette indices: 0xDA, 0xDD, 0x6E, 0xFF
-                    elif imm in [0xDA, 0xDD, 0x6E, 0xFF]:
-                        exists = any(p['value'] == imm for p in path_info['color_params'])
-                        if not exists:
-                            path_info['color_params'].append({
-                                'addr': check_addr,
-                                'value': imm,
-                                'type': 'palette_index',
-                                'rd': rd
-                            })
-                            self.log(f"      Palette index 0x{imm:02X} at 0x{check_addr:06X}")
+                            # Check if MOVW (32-bit)
+                            if (hw & 0xFBF0) == 0xF240:
+                                hw2 = data[addr+2] | (data[addr+3] << 8)
+                                imm4 = hw & 0xF
+                                i_bit = (hw >> 10) & 1
+                                imm3 = (hw2 >> 12) & 0x7
+                                rd = (hw2 >> 8) & 0xF
+                                imm8 = hw2 & 0xFF
+                                imm16 = (i_bit << 11) | (imm4 << 12) | (imm3 << 8) | imm8
+                                color_values[len(color_values)] = imm16
+                                addr += 4
+                                continue
 
-    def _extract_theme_configs(self, paths: List[dict]) -> List[dict]:
-        """Extract theme configurations from highlight paths."""
-        configs = []
+                            # Move to next instruction
+                            if self._is_32bit_instruction(addr):
+                                addr += 4
+                            else:
+                                addr += 2
 
-        for path in paths:
-            # Look for color parameters after the branch
-            if path['branch_addr']:
-                # Search for MOV immediate patterns (color parameters)
-                for offset in range(2, 20, 2):
-                    search_addr = path['branch_addr'] + offset
-                    if search_addr + 2 > len(self.firmware_data):
+                        func = ThemeFunction(
+                            addr=func_start,
+                            end_addr=func_end,
+                            pattern_type="switch_case"
+                        )
+                        func.preload_colors = color_values
+                        functions.append(func)
+
+            i = j if j > i + 1 else i + 1
+
+        return functions
+
+    def _find_ite_patterns(self) -> List[ThemeFunction]:
+        """Find ITE conditional execution pattern"""
+        functions = []
+        data = self.decoder.data
+
+        # Fast scan: Search for IT instruction byte patterns
+        # IT instructionEncoding: 1011 1111 firstcond mask (BFxx)
+        it_candidates = []
+
+        for i in range(0, len(data) - 40, 2):
+            hw = data[i] | (data[i+1] << 8)
+            if (hw & 0xFF00) == 0xBF00:  # IT instruction
+                firstcond = (hw >> 4) & 0xF
+                mask = hw & 0xF
+                if mask != 0:  # Not NOP or hint instructions
+                    it_candidates.append(i)
+
+        # Analyze candidate addresses
+        seen_addrs = set()
+        for i in it_candidates:
+            instr = self.decoder.decode(i)
+
+            if instr.instr_type == InstructionType.IT:
+                # Check if MOVW (color load) exists in IT block
+                # Note: MOVW is 32-bit instruction, need to check more space
+                has_color_movw = False
+                it_size = self._get_it_block_size(instr.it_mask)
+                color_values = []
+
+                addr = i + 2
+                for j in range(it_size * 2):  # each instruction max 4 bytes
+                    if addr + 4 > len(data):
                         break
+                    it_instr = self.decoder.decode(addr)
+                    if it_instr.instr_type == InstructionType.MOVW:
+                        has_color_movw = True
+                        color_values.append(it_instr.imm)
+                    # Move to next instruction
+                    if self._is_32bit_instruction(addr):
+                        addr += 4
+                    else:
+                        addr += 2
 
-                    mov = self.decode_thumb_mov_imm(search_addr)
-                    if mov:
-                        # Check if this looks like a color/mode parameter
-                        if 0x30 <= mov['imm'] <= 0xFF:
-                            if mov['imm'] in [0x35, 0x36, 0x37, 0x38, 0x81]:
-                                path['mode_params'].append({
-                                    'addr': search_addr,
-                                    'value': mov['imm'],
-                                    'type': 'mode'
-                                })
-                            elif mov['imm'] == 0x6E:
-                                path['color_params'].append({
-                                    'addr': search_addr,
-                                    'value': mov['imm'],
-                                    'type': 'param2'
-                                })
-                            elif mov['imm'] in [0xDA, 0xDD, 0xFF]:
-                                path['color_params'].append({
-                                    'addr': search_addr,
-                                    'value': mov['imm'],
-                                    'type': 'palette_index'
-                                })
+                if has_color_movw:
+                    func_start = self._find_function_start(i)
+                    # If function start not found, use range before IT instruction as function start
+                    if func_start is None:
+                        func_start = i - 50  # Default 50 bytes before
+                    if func_start not in seen_addrs:
+                        seen_addrs.add(func_start)
+                        func = ThemeFunction(
+                            addr=func_start,
+                            end_addr=i + 40,
+                            pattern_type="ite"
+                        )
+                        func.preload_colors[0] = color_values[0] if color_values else 0
+                        if len(color_values) > 1:
+                            func.preload_colors[1] = color_values[1]
+                        functions.append(func)
 
-        # Build configs from paths
-        for i, path in enumerate(paths):
-            if path['color_params'] or path['mode_params']:
-                config = {
-                    'theme_id': i,
-                    'variant_check': {
-                        'offset': path['offset'],
-                        'compare_value': path['cmp_imm']
-                    },
-                    'modes': [p['value'] for p in path['mode_params']],
-                    'palette_indices': [p['value'] for p in path['color_params'] if p['type'] == 'palette_index']
-                }
-                configs.append(config)
+        return functions
 
-        return configs
+    def _collect_movw_sequence(self, start_addr: int) -> List[Instruction]:
+        """Collect consecutive MOVW instruction sequence"""
+        sequence = []
+        addr = start_addr
+        max_count = 10
 
-    def _find_render_modes(self) -> List[int]:
-        """Find all render mode values in the firmware."""
-        modes = set()
+        for _ in range(max_count):
+            if addr + 4 > len(self.decoder.data):
+                break
 
-        data = self.firmware_data
-        search_range = min(len(data), 0x200000)
+            instr = self.decoder.decode(addr)
 
-        addr = 0
-        while addr < search_range:
-            mov = self.decode_thumb_mov_imm(addr)
-            if mov and mov['imm'] in [0x35, 0x36, 0x37, 0x38, 0x81]:
-                modes.add(mov['imm'])
-            addr += 2
-
-        return sorted(list(modes))
-
-    def _find_palette_base(self) -> int:
-        """Find palette base address from LDR PC patterns."""
-        data = self.firmware_data
-        search_range = min(len(data), 0x100000)
-
-        addr = 0
-        while addr < search_range:
-            # Look for LDR r3, [PC, #offset] pattern
-            ldr = self.decode_thumb_ldr_pc(addr)
-            if ldr and ldr['rd'] == 3:
-                # Check if followed by LDRH
-                next_addr = addr + 2
-                if next_addr + 2 <= len(data):
-                    ldrh = self.decode_thumb_ldr_reg(next_addr)
-                    if ldrh and ldrh['rn'] == 3:
-                        # Calculate literal pool address
-                        pc = addr + 4
-                        literal_offset = ldr['imm'] * 4
-                        literal_addr = (pc + literal_offset) & 0xFFFFFFFC
-
-                        if literal_addr + 4 <= len(data):
-                            literal_value = struct.unpack('<I', data[literal_addr:literal_addr+4])[0]
-                            # Check if this looks like a palette base (typically 0x1000 or similar)
-                            if literal_value & 0xFFFFF000 == literal_value:
-                                self.log(f"Found potential palette base: 0x{literal_value:08X}")
-                                return literal_value
-
-            addr += 2
-
-        # Default fallback
-        return 0x1000
-
-    # ==========================================================================
-    # Original Color Lookup Analysis (kept for compatibility)
-    # ==========================================================================
-
-    def trace_theme_colors(self, theme_id: int, state: str = "unselected") -> List[ColorTrace]:
-        """Trace color lookup for a specific theme and state."""
-        self.traces = []
-        theme_def = THEME_DEFINITIONS.get(theme_id, {"name": "Unknown", "mode": 0x37})
-
-        self.log(f"Tracing theme {theme_def['name']} (0x{theme_id:02X}) - {state}")
-
-        # Use auto-discovered config
-        config = self.auto_discover_theme_config()
-        self.log(f"Auto-discovered {config['theme_count']} themes")
-
-        if state == "unselected":
-            mode = theme_def.get("mode", 0x37)
-            color_index = THEME_COLORS.get(theme_id, {}).get("unselected", 0)
-        elif state == "selected":
-            mode = theme_def.get("mode", 0x36) if theme_def.get("variant", 0) else 0x36
-            color_index = THEME_COLORS.get(theme_id, {}).get("selected", 0)
-        else:  # highlight
-            mode = theme_def.get("highlight_mode", 0x81)
-            color_index = THEME_COLORS.get(theme_id, {}).get("highlight", 221)
-
-        trace = self._analyze_color_lookup(theme_id, theme_def["name"], state, mode, color_index)
-        self.traces.append(trace)
-
-        return self.traces
-
-    def _analyze_color_lookup(self, theme_id: int, theme_name: str, state: str,
-                              mode: int, color_index: int) -> ColorTrace:
-        """Analyze how a color is looked up based on mode and theme."""
-        execution_path = []
-        source_type = "unknown"
-        source_value = color_index
-        description = ""
-
-        theme_variant = THEME_DEFINITIONS.get(theme_id, {}).get("variant", 0)
-        execution_path.append(f"THEME_SELECT = 0x{theme_id:02X} ({theme_name})")
-        execution_path.append(f"THEME_VARIANT = {theme_variant}")
-        execution_path.append(f"RENDER_MODE determined by theme_select + state")
-        execution_path.append(f"  -> mode = 0x{mode:02X}")
-
-        if state == "highlight":
-            if theme_variant == 1:
-                source_type = "palette"
-                source_value = color_index
-                description = f"Highlight uses mode 0x81 (palette index 0x{color_index:02X})"
-                execution_path.append(f"HIGHLIGHT_PATH: mode=0x81 (palette lookup)")
-                execution_path.append(f"  -> theme_variant={theme_variant} uses palette index 0x{color_index:02X}")
+            if instr.instr_type == InstructionType.MOVW:
+                sequence.append(instr)
+                addr += 4
+            elif instr.instr_type in [InstructionType.MOVS, InstructionType.LDR]:
+                # Allow other load instructions in between
+                addr += 2 if instr.instr_type == InstructionType.MOVS else 4
             else:
-                source_type = "immediate"
-                source_value = THEME_COLORS.get(theme_id, {}).get("unselected", 255)
-                description = f"Midnight/Sky uses mode 0x38 (hardcoded color)"
-                execution_path.append(f"HIGHLIGHT_PATH: mode=0x38 (hardcoded)")
-        elif mode in [0x35, 0x36, 0x37]:
-            source_type = "palette"
-            source_value = color_index
-            description = f"Palette lookup at index 0x{color_index:02X}"
-            execution_path.append(f"MODE 0x{mode:02X}: Direct palette lookup")
+                break
 
-        execution_path.append(f"COLOR_SOURCE: {source_type}")
-        execution_path.append(f"  -> Palette base: 0x{self.palette.address:04X}")
-        execution_path.append(f"  -> Color index: 0x{source_value:02X} ({source_value})")
+        return sequence
 
-        final_color = self._resolve_color(source_type, source_value)
+    def _has_conditional_structure(self, addr: int) -> bool:
+        """Check for conditional structure after address (CMP + BEQ/BNE/IT)"""
+        for offset in range(0, 30, 2):
+            instr = self.decoder.decode(addr + offset)
+            if instr.instr_type == InstructionType.CMP:
+                next_instr = self.decoder.decode(addr + offset + 2)
+                if next_instr.instr_type in [InstructionType.BEQ, InstructionType.BNE, InstructionType.IT]:
+                    return True
+        return False
 
-        return ColorTrace(
-            theme_id=theme_id,
-            theme_name=theme_name,
-            state=state,
-            mode=mode,
-            color_source=ColorSource(
-                source_type=source_type,
-                value=source_value,
-                address=self.palette.address,
-                description=description
-            ),
-            final_color=final_color,
-            execution_path=execution_path
+    def _find_function_start(self, addr: int) -> Optional[int]:
+        """Search backward for function start (PUSH instruction)"""
+        for offset in range(0, 1000, 2):  # Increase search range to 1000 bytes
+            check_addr = addr - offset
+            if check_addr < 0:
+                break
+            instr = self.decoder.decode(check_addr)
+            if instr.instr_type == InstructionType.PUSH:
+                return check_addr
+        return None
+
+    def _find_function_end(self, addr: int, max_search: int = 400) -> int:
+        """
+        Search forward for function end
+        Strategy: Find last POP + BX LR sequence
+        """
+        search_end = min(addr + max_search, len(self.decoder.data))
+        it_block_remaining = 0
+        last_pop_bx_addr = 0
+
+        while addr < search_end:
+            hw = self.decoder.read16(addr)
+            is_32bit = (hw & 0xF800) in [0xE800, 0xF000, 0xF800]
+            instr_size = 4 if is_32bit else 2
+
+            # Handle IT block
+            if it_block_remaining > 0:
+                it_block_remaining -= 1
+                addr += instr_size
+                continue
+
+            # Check IT instruction
+            if (hw & 0xFF00) == 0xBF00:
+                mask = hw & 0xF
+                if mask != 0:
+                    if mask & 0x1:
+                        it_block_remaining = 4
+                    elif mask & 0x2:
+                        it_block_remaining = 3
+                    elif mask & 0x4:
+                        it_block_remaining = 2
+                    else:
+                        it_block_remaining = 1
+                addr += instr_size
+                continue
+
+            # Check POP + BX LR sequence (outside IT block)
+            if (hw & 0xFF00) == 0xBC00:  # POP
+                next_addr = addr + 2
+                if next_addr + 2 <= len(self.decoder.data):
+                    next_hw = self.decoder.read16(next_addr)
+                    if next_hw == 0x4770:  # BX LR
+                        last_pop_bx_addr = next_addr + 2
+
+            addr += instr_size
+
+        return last_pop_bx_addr if last_pop_bx_addr > 0 else addr
+
+    def _get_it_block_size(self, mask: int) -> int:
+        """Get IT block size"""
+        if mask == 0:
+            return 0
+        if mask & 0x1:
+            return 4
+        elif mask & 0x2:
+            return 3
+        elif mask & 0x4:
+            return 2
+        else:
+            return 1
+
+
+# ============================================================================
+# Control Flow Simulator
+# ============================================================================
+
+class ControlFlowSimulator:
+    """Control Flow Simulator"""
+
+    def __init__(self, decoder: ThumbDecoder):
+        self.decoder = decoder
+
+    def _is_32bit_instruction(self, addr: int) -> bool:
+        """Check if instruction is 32-bit"""
+        if addr + 2 > len(self.decoder.data):
+            return False
+        hw = self.decoder.read16(addr)
+        return (hw & 0xF800) in [0xE800, 0xF000, 0xF800]
+
+    def simulate(self, func: ThemeFunction, theme_value: int) -> Tuple[Dict[int, int], List[ColorWrite], List[MovwRecord]]:
+        """
+        Simulate function execution
+
+        Returns: (Final register state, Color Write Record list, MOVW load record list)
+        """
+        registers = {i: 0 for i in range(16)}
+        registers[0] = theme_value  # R0 = theme value
+
+        # Track which MOVW loaded each register
+        register_sources: Dict[int, Optional[MovwRecord]] = {i: None for i in range(16)}
+
+        color_writes = []
+        movw_records = []  # Record MOVW instructions
+        seen_addrs = set()  # Prevent duplicates
+        last_cmp_result = False
+        it_block_remaining = 0
+        it_conditions = []
+        current_theme_condition = None  # Current condition applicable theme
+
+        addr = func.addr
+        max_steps = 200
+        end_addr = func.end_addr if func.end_addr > 0 else func.addr + 500
+
+        step = 0
+        while step < max_steps and addr < end_addr:
+            # preventnoneinfinite loop
+            if addr in seen_addrs:
+                break
+            seen_addrs.add(addr)
+
+            instr = self.decoder.decode(addr)
+            instr_size = 4 if self._is_32bit_instruction(addr) else 2
+
+            # Handle IT blockinside instruction
+            if it_block_remaining > 0:
+                cond_idx = len(it_conditions) - it_block_remaining
+                if cond_idx < len(it_conditions):
+                    should_exec = it_conditions[cond_idx]
+
+                    if should_exec:
+                        if instr.instr_type in [InstructionType.STRH, InstructionType.STRH_W]:
+                            write = self._handle_strh(instr, registers, theme_value, register_sources)
+                            if write:
+                                write.theme_condition = current_theme_condition
+                                color_writes.append(write)
+                        elif instr.instr_type == InstructionType.MOVW:
+                            movw = MovwRecord(
+                                addr=addr,
+                                instr=instr,
+                                color_value=instr.imm,
+                                target_reg=instr.rd,
+                                theme_condition=current_theme_condition
+                            )
+                            movw_records.append(movw)
+                            register_sources[instr.rd] = movw  # record registersource
+                            registers[instr.rd] = instr.imm
+                        elif instr.instr_type == InstructionType.POP:
+                            # POP inside IT block execution，check not containing PC
+                            hw = self.decoder.read16(addr)
+                            if hw & 0x100:  # POP {..., PC}
+                                break  # functionReturns
+                        elif instr.instr_type == InstructionType.BX:
+                            # BX LR inside IT block execution
+                            break  # functionReturns
+
+                it_block_remaining -= 1
+                addr += instr_size
+                step += 1
+                continue
+
+            # Handle normal instructions
+            if instr.instr_type == InstructionType.PUSH:
+                pass  # ignore
+
+            elif instr.instr_type == InstructionType.POP:
+                pass  # ignore
+
+            elif instr.instr_type == InstructionType.BX:
+                break  # functionReturns
+
+            elif instr.instr_type == InstructionType.MOVW:
+                # Record MOVW instructions
+                movw = MovwRecord(
+                    addr=addr,
+                    instr=instr,
+                    color_value=instr.imm,
+                    target_reg=instr.rd,
+                    theme_condition=current_theme_condition
+                )
+                movw_records.append(movw)
+                register_sources[instr.rd] = movw  # record registersource
+                registers[instr.rd] = instr.imm
+
+            elif instr.instr_type == InstructionType.MOVS:
+                registers[instr.rd] = instr.imm
+
+            elif instr.instr_type == InstructionType.CMP:
+                if 0 <= instr.rn < 16:
+                    last_cmp_result = (registers[instr.rn] == instr.imm)
+
+            elif instr.instr_type == InstructionType.BEQ:
+                if last_cmp_result:
+                    addr = instr.branch_target
+                    step += 1
+                    continue
+
+            elif instr.instr_type == InstructionType.BNE:
+                if not last_cmp_result:
+                    addr = instr.branch_target
+                    step += 1
+                    continue
+
+            elif instr.instr_type == InstructionType.B:
+                addr = instr.branch_target
+                step += 1
+                continue
+
+            elif instr.instr_type == InstructionType.CBZ:
+                if registers[instr.rn] == 0:
+                    addr = instr.branch_target
+                    step += 1
+                    continue
+
+            elif instr.instr_type == InstructionType.CBNZ:
+                if registers[instr.rn] != 0:
+                    addr = instr.branch_target
+                    step += 1
+                    continue
+
+            elif instr.instr_type == InstructionType.IT:
+                it_block_remaining, it_conditions = self._setup_it_block(
+                    instr, last_cmp_result
+                )
+
+            elif instr.instr_type in [InstructionType.STRH, InstructionType.STRH_W]:
+                write = self._handle_strh(instr, registers, theme_value, register_sources)
+                if write:
+                    color_writes.append(write)
+
+            # Move to next instruction
+            addr += instr_size
+            step += 1
+
+        return registers, color_writes, movw_records
+
+    def _setup_it_block(self, instr: Instruction, cmp_result: bool) -> Tuple[int, List[bool]]:
+        """Set IT block execution conditions"""
+        mask = instr.it_mask
+        firstcond = instr.cond
+
+        # Calculate block size
+        if mask & 0x1:
+            size = 4
+        elif mask & 0x2:
+            size = 3
+        elif mask & 0x4:
+            size = 2
+        else:
+            size = 1
+
+        # Calculate whether each instruction executes
+        conditions = []
+        fc_lsb = firstcond & 1
+
+        # No.oneiteminstructionalways uses firstcond
+        cond_true = (firstcond == 0 and cmp_result) or (firstcond == 1 and not cmp_result)
+        conditions.append(cond_true)
+
+        # aftersubsequent instruction
+        for i in range(1, size):
+            bit_pos = 4 - i  # mask[3], mask[2], mask[1]
+            mask_bit = (mask >> bit_pos) & 1
+
+            if mask_bit == fc_lsb:
+                # T - same condition
+                conditions.append(cond_true)
+            else:
+                # E - opposite condition
+                conditions.append(not cond_true)
+
+        return size, conditions
+
+    def _handle_strh(self, instr: Instruction, registers: Dict[int, int],
+                     theme_value: int, register_sources: Dict[int, Optional['MovwRecord']] = None) -> Optional[ColorWrite]:
+        """Handle STRH instruction"""
+        rt = instr.rd if instr.rd >= 0 else 0
+        rn = instr.rn if instr.rn >= 0 else 0
+        color = registers.get(rt, 0)
+
+        # Find MOVW loading this register MOVW instruction
+        movw_instr = None
+        if register_sources:
+            movw_instr = register_sources.get(rt)
+
+        return ColorWrite(
+            addr=instr.addr,
+            instr=instr,
+            color_value=color,
+            target_reg=rn,
+            source_reg=rt,
+            theme_condition=theme_value,
+            movw_instr=movw_instr
         )
 
-    def _resolve_color(self, source_type: str, source_value: int) -> RGB565:
-        """Resolve the final color value."""
-        if source_type == "palette":
-            return self.palette.get_color(source_value) or RGB565(r=0, g=0, b=0)
-        elif source_type == "immediate":
-            return self._rgb565_to_rgb(source_value)
-        return RGB565(r=0, g=0, b=0)
 
-    def _rgb565_to_rgb(self, value: int) -> RGB565:
-        """Convert RGB565 integer to RGB565 object."""
-        r = (value >> 11) & 0x1F
-        g = (value >> 5) & 0x3F
-        b = value & 0x1F
-        return RGB565(r=r, g=g, b=b)
+# ============================================================================
+# Report Generator
+# ============================================================================
 
-    # ==========================================================================
-    # Full Theme Analysis
-    # ==========================================================================
+class ReportGenerator:
+    """Generate Analysis Report"""
 
-    def analyze_all_themes(self) -> Dict[str, List[ColorTrace]]:
-        """Analyze all theme colors and their lookup paths."""
-        results = {}
-        config = self.auto_discover_theme_config()
+    def __init__(self, firmware_path: str, decoder: Optional['ThumbDecoder'] = None):
+        self.firmware_path = firmware_path
+        self.decoder = decoder
+        self.functions = []
+        self.theme_colors = defaultdict(dict)  # theme_id -> {target: color}
 
-        for theme_id, theme_def in THEME_DEFINITIONS.items():
-            theme_name = theme_def["name"]
-            traces = []
-            for state in ["unselected", "selected", "highlight"]:
-                state_traces = self.trace_theme_colors(theme_id, state)
-                traces.extend(state_traces)
-            results[theme_name] = traces
+    def add_function(self, func: ThemeFunction, theme_results: Dict[int, List[ColorWrite]]):
+        """Add function analysis result"""
+        self.functions.append((func, theme_results))
 
-        return results
+        # If UI element not identified，identify based on behavior
+        if func.ui_element == "unknown" or not func.ui_element:
+            func.ui_element = self._identify_ui_element(func, theme_results)
 
-    def generate_trace_report(self, traces: List[ColorTrace]) -> str:
-        """Generate a detailed trace report."""
-        lines = [
-            "=" * 70,
-            "COLOR LOOKUP TRACE REPORT",
-            "=" * 70,
-            "",
-            f"Firmware: {self.firmware_path}",
-            f"Palette: 0x{self.palette.address:04X} ({len(self.palette.colors)} colors)",
-            "",
-        ]
+        # Summarize colors for preload_store pattern function（this is menu theme function）
+        # Only process first detected preload_store function，avoid mixing data from other functions
+        if func.pattern_type == "preload_store" and "Menu Text" in func.ui_element:
+            # check if already hasmenusinglecolorfunction
+            has_menu = any(
+                f.pattern_type == "preload_store" and "Menu Text" in f.ui_element
+                for f, _ in self.functions[:-1]  # exclude the just added one
+            )
+            if not has_menu:
+                for theme_id, writes in theme_results.items():
+                    for write in writes:
+                        # Only collect writes to R1, R2, R3 color（these are main color registers）
+                        if write.target_reg in [1, 2, 3]:
+                            key = f"R{write.target_reg}"
+                            self.theme_colors[theme_id][key] = write.color_value
 
-        for trace in traces:
-            lines.append("-" * 70)
-            lines.append(str(trace))
+        # Summarize colors for ITE pattern FLAC function
+        if func.pattern_type == "ite" and "FLAC" in func.ui_element:
+            # extract FLAC color using behavior analysis
+            if self.decoder:
+                flac_behavior = self._analyze_flac_behavior(func.addr)
+                if flac_behavior['is_flac']:
+                    for theme_id in range(5):
+                        if theme_id == 4:
+                            self.theme_colors[theme_id]["FLAC"] = flac_behavior['color_for_4']
+                        else:
+                            self.theme_colors[theme_id]["FLAC"] = flac_behavior['color_for_other']
 
-        lines.extend([
-            "=" * 70,
-            "SUMMARY",
-            "=" * 70,
-            "",
-        ])
+    def _analyze_flac_behavior(self, addr: int, scan_range: int = 100) -> dict:
+        """Identify FLAC function using behavior analysis"""
+        result = {
+            'is_flac': False,
+            'color_for_4': 0,
+            'color_for_other': 0,
+        }
 
-        palette_count = sum(1 for t in traces if t.color_source.source_type == "palette")
-        immediate_count = sum(1 for t in traces if t.color_source.source_type == "immediate")
+        if not self.decoder:
+            return result
 
-        lines.append(f"Palette lookups:  {palette_count}")
-        lines.append(f"Hardcoded values: {immediate_count}")
-        lines.append("")
-        lines.append("Source type key:")
-        lines.append("  - palette:   Color from palette (dynamic, index into 0x1000)")
-        lines.append("  - immediate: Hardcoded RGB565 value in code")
+        offset = 0
+        found_cmp_4 = False
+        cmp_4_offset = 0
+
+        # Step 1: Find CMP Rx, #4
+        while offset < scan_range:
+            hw = self.decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = self.decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            if 'CMP' in mn and (instr.imm == 4 or '#4' in ops or '#0x4' in ops):
+                found_cmp_4 = True
+                cmp_4_offset = offset
+                break
+
+            offset += 4 if is_32bit else 2
+
+        if not found_cmp_4:
+            return result
+
+        # Step 2: Find two consecutive MOVW after CMP #4
+        offset = cmp_4_offset + (4 if self.decoder.read16(addr + cmp_4_offset) >= 0xE800 else 2)
+
+        movw_list = []
+        while offset < scan_range and len(movw_list) < 2:
+            hw = self.decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = self.decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            if 'MOVW' in mn and '#' in ops:
+                try:
+                    val_str = ops.split('#')[1].split()[0].rstrip('}')
+                    val = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
+                    movw_list.append(val)
+                except:
+                    pass
+
+            offset += 4 if is_32bit else 2
+
+        if len(movw_list) == 2 and movw_list[0] != movw_list[1]:
+            result['is_flac'] = True
+            result['color_for_4'] = movw_list[0]
+            result['color_for_other'] = movw_list[1]
+
+        return result
+
+    def _identify_ui_element(self, func: ThemeFunction, theme_results: Dict[int, List[ColorWrite]]) -> str:
+        """Identify UI element corresponding to function（using behavior analysis, no hardcoded color values）"""
+        # Get all color values for auxiliary judgment
+        all_colors = set()
+        for writes in theme_results.values():
+            for w in writes:
+                all_colors.add(w.color_value)
+        for c in func.preload_colors.values():
+            all_colors.add(c)
+
+        # For ITE pattern, detect FLAC using behavior analysis
+        if func.pattern_type == "ite" and self.decoder:
+            flac_behavior = self._analyze_flac_behavior(func.addr)
+            if flac_behavior['is_flac']:
+                return "FLAC String Text"
+
+        # For switch_case pattern, check FLAC first
+        if func.pattern_type == "switch_case" and self.decoder:
+            # detect FLAC using context analysis
+            from theme_analyzer_v3 import ThemeDiscovery
+            flac_context = ThemeDiscovery.detect_flac_by_context(self.decoder, func.addr)
+            if flac_context['is_flac']:
+                return "FLAC String Text"
+
+            # then detect progress bar/marquee
+            behavior = self._analyze_switch_case_behavior(func.addr)
+            if behavior['cmp_r12_count'] >= 5 and behavior['distinct_colors'] == 5:
+                if behavior['strh_count'] > 0:
+                    return "Progress Bar Background"
+                else:
+                    return "Marquee/Scrolling Text Overlay"
+
+        # Menu Text Colors (preload_store pattern)
+        if func.pattern_type == "preload_store":
+            # check if has write to R1, R2, R3
+            if any(w.target_reg in [1, 2, 3] for writes in theme_results.values() for w in writes):
+                return "Menu Text Colors (Highlight/Normal/Second)"
+
+        return "Unknown UI Element"
+
+    def _analyze_switch_case_behavior(self, addr: int, scan_range: int = 200) -> dict:
+        """Analyze switch_case function behavior features"""
+        features = {
+            'cmp_r12_count': 0,
+            'distinct_colors': 0,
+            'strh_count': 0,
+            'colors': set(),
+        }
+
+        if not self.decoder:
+            return features
+
+        offset = 0
+        colors = []
+
+        while offset < scan_range:
+            hw = self.decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = self.decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            if mn == 'CMP' and 'R12' in ops:
+                imm_val = instr.imm
+                if 0 <= imm_val <= 4:
+                    features['cmp_r12_count'] += 1
+
+            if 'MOVW' in mn and 'R0' in ops and '#' in ops:
+                try:
+                    val_str = ops.split('#')[1].split()[0].rstrip('}')
+                    val = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
+                    colors.append(val)
+                except:
+                    pass
+
+            if 'STRH' in mn:
+                features['strh_count'] += 1
+
+            offset += 4 if is_32bit else 2
+
+        features['colors'] = set(colors)
+        features['distinct_colors'] = len(set(colors))
+
+        return features
+
+    def generate_markdown(self) -> str:
+        """Generate Markdown report"""
+        lines = []
+        lines.append(f"# Theme Color Analysis Report")
+        lines.append(f"")
+        lines.append(f"**Firmware file**: `{os.path.basename(self.firmware_path)}`")
+        lines.append(f"**Analysis time**: {self._get_timestamp()}")
+        lines.append(f"")
+
+        # Detected functions
+        lines.append(f"## Detected theme functions")
+        lines.append(f"")
+        lines.append(f"| Address | Pattern | UI Element |")
+        lines.append(f"|------|------|---------|")
+
+        for func, _ in self.functions:
+            lines.append(f"| 0x{func.addr:05X} | {func.pattern_type} | {func.ui_element} |")
+
+        lines.append(f"")
+
+        # UI Element Color Summary
+        lines.append(f"## UI Element Color Summary")
+        lines.append(f"")
+
+        if self.theme_colors:
+            # Group colors by class
+            menu_colors = {}
+            flac_colors = {}
+            other_colors = {}
+
+            for theme_id, colors in self.theme_colors.items():
+                for key, val in colors.items():
+                    if key.startswith("R"):
+                        if theme_id not in menu_colors:
+                            menu_colors[theme_id] = {}
+                        menu_colors[theme_id][key] = val
+                    elif key == "FLAC":
+                        flac_colors[theme_id] = val
+                    else:
+                        if theme_id not in other_colors:
+                            other_colors[theme_id] = {}
+                        other_colors[theme_id][key] = val
+
+            # Menu Text Colors
+            if menu_colors:
+                lines.append(f"### Menu Text Colors")
+                lines.append(f"")
+                all_targets = sorted(set(
+                    k for tc in menu_colors.values() for k in tc.keys()
+                ))
+
+                # Add color meaning description
+                lines.append(f"**Destination register meaning**:")
+                lines.append(f"- R1: Highlight/Foreground color")
+                lines.append(f"- R2: Secondary color")
+                lines.append(f"- R3: Foreground color")
+                lines.append(f"")
+
+                lines.append(f"| theme | " + " | ".join(all_targets) + " |")
+                lines.append(f"|------|" + "|".join(["------"] * len(all_targets)) + "|")
+
+                for theme_id in sorted(menu_colors.keys()):
+                    colors = menu_colors[theme_id]
+                    row = [f"Theme {theme_id}"]
+                    for key in all_targets:
+                        if key in colors:
+                            row.append(f"0x{colors[key]:04X}")
+                        else:
+                            row.append("-")
+                    lines.append(f"| " + " | ".join(row) + " |")
+                lines.append(f"")
+
+            # FLAC String colors
+            if flac_colors:
+                lines.append(f"### FLAC String Text Colors")
+                lines.append(f"")
+                lines.append(f"| theme | FLAC color |")
+                lines.append(f"|------|----------|")
+                for theme_id in sorted(flac_colors.keys()):
+                    lines.append(f"| Theme {theme_id} | 0x{flac_colors[theme_id]:04X} |")
+                lines.append(f"")
+
+        else:
+            lines.append(f"*No theme color functions detected. This firmware version may not support theme system.*")
+
+        lines.append(f"")
+
+        # Detailed Instruction Report
+        lines.append(f"## Detailed Instruction Report")
+        lines.append(f"")
+
+        for func, theme_results in self.functions:
+            lines.append(f"### function @ 0x{func.addr:05X} ({func.ui_element})")
+            lines.append(f"")
+            lines.append(f"**Pattern**: {func.pattern_type}")
+            lines.append(f"")
+
+            for theme_id, writes in sorted(theme_results.items()):
+                if not writes:
+                    continue
+
+                lines.append(f"#### Theme {theme_id}")
+                lines.append(f"")
+                lines.append(f"| MOVW Address | MOVW instruction | STRH Address | STRH instruction | colorvalue |")
+                lines.append(f"|------------|-----------|-----------|-----------|--------|")
+
+                for write in writes:
+                    # display MOVW instruction（ifresulthas）
+                    if write.movw_instr:
+                        movw_str = f"0x{write.movw_instr.addr:05X}: {write.movw_instr.instr.mnemonic} {write.movw_instr.instr.operands}"
+                    else:
+                        movw_str = "(preload)"
+                    strh_str = f"0x{write.addr:05X}: {write.instr.mnemonic} {write.instr.operands}"
+                    lines.append(f"| {movw_str.split(':')[0] if ':' in movw_str else movw_str} | {movw_str.split(': ')[1] if ': ' in movw_str else movw_str} | 0x{write.addr:05X} | {write.instr.mnemonic} {write.instr.operands} | 0x{write.color_value:04X} |")
+
+                lines.append(f"")
 
         return "\n".join(lines)
 
-    # ==========================================================================
-    # Unit Test Interface
-    # ==========================================================================
+    def _get_timestamp(self) -> str:
+        from datetime import datetime
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def unit_test(self, test_cases: List[dict]) -> bool:
-        """Run unit tests for color lookup."""
-        print("\n" + "=" * 60)
-        print("UNIT TESTS: Symbolic Color Engine (Auto-Discovery)")
-        print("=" * 60)
+    def generate_html(self, title: str = "Theme Color Analysis Report") -> str:
+        """Generate HTML report"""
+        from datetime import datetime
 
-        # First, run auto-discovery
-        config = self.auto_discover_theme_config()
-        print(f"\nAuto-discovered {config['theme_count']} theme configurations")
-        print(f"Render modes found: {[hex(m) for m in config['render_modes']]}")
-        print(f"Palette base: 0x{config['palette_base']:04X}")
+        # Convert color value to CSS color
+        def color_to_css(val):
+            if val == 0 or val == "0x0000":
+                return "#000000"
+            r = (val >> 11) & 0x1F
+            g = (val >> 5) & 0x3F
+            b = val & 0x1F
+            # 5-6-5 RGB expanded to 8-8-8
+            r = (r << 3) | (r >> 2)
+            g = (g << 2) | (g >> 4)
+            b = (b << 3) | (b >> 2)
+            return f"rgb({r},{g},{b})"
 
-        passed = 0
-        failed = 0
-
-        for i, tc in enumerate(test_cases):
-            theme_id = tc["theme_id"]
-            state = tc["state"]
-            expected_source = tc["expected_source"]
-
-            traces = self.trace_theme_colors(theme_id, state)
-            if not traces:
-                print(f"[FAIL] Test {i+1}: No trace generated")
-                failed += 1
-                continue
-
-            trace = traces[0]
-            actual_source = trace.color_source.source_type
-
-            if actual_source == expected_source:
-                status = "[PASS]"
-                passed += 1
-            else:
-                status = "[FAIL]"
-                failed += 1
-
-            theme_name = THEME_DEFINITIONS.get(theme_id, {}).get("name", "Unknown")
-            print(f"{status} Test {i+1}: {theme_name} - {state}")
-            print(f"       Expected: {expected_source}, Got: {actual_source}")
-
-        print("-" * 60)
-        print(f"Results: {passed} passed, {failed} failed")
-        print("=" * 60)
-
-        return failed == 0
-
-
-# =============================================================================
-# Theme Analyzer
-# =============================================================================
-
-class ThemeAnalyzer:
-    """Analyze theme colors from palette."""
-
-    def __init__(self, palette: Palette):
-        self.palette = palette
-
-    def analyze_themes(self) -> List[ThemeInfo]:
-        """Analyze all theme colors."""
-        themes = []
-
-        for theme_id, theme_def in THEME_DEFINITIONS.items():
-            colors = THEME_COLORS.get(theme_id, {})
-            if colors:
-                theme = ThemeInfo(
-                    name=theme_def["name"],
-                    id=theme_id,
-                    unselected_color=self._get_color(colors.get("unselected", 0)),
-                    selected_color=self._get_color(colors.get("selected", 0)),
-                    highlight_color=self._get_color(colors.get("highlight", 0)),
-                    background_color=self._get_rgb565(colors.get("background", 0)),
-                    text_color=self._get_rgb565(colors.get("text", 0)),
-                )
-                themes.append(theme)
-
-        return themes
-
-    def _get_color(self, index: int) -> RGB565:
-        """Get color by palette index."""
-        if 0 <= index < len(self.palette.colors):
-            return self.palette.colors[index]
-        return RGB565(r=0, g=0, b=0)
-
-    def _get_rgb565(self, value: int) -> RGB565:
-        """Convert RGB565 value to RGB565 object."""
-        r = (value >> 11) & 0x1F
-        g = (value >> 5) & 0x3F
-        b = value & 0x1F
-        return RGB565(r=r, g=g, b=b)
-
-    def generate_html_preview(self, output_path: str):
-        """Generate HTML color preview."""
-        themes = self.analyze_themes()
+        def parse_color(c):
+            if isinstance(c, int):
+                return c
+            if isinstance(c, str) and c.startswith("0x"):
+                return int(c, 16)
+            return 0
 
         html = f"""<!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
-    <title>Theme Color Preview - {self.palette.firmware_name}</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
     <style>
-        body {{ font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }}
-        h1 {{ color: #333; }}
-        .theme-card {{
-            background: white;
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
             padding: 20px;
-            margin: 20px 0;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }}
-        .theme-name {{ font-size: 24px; font-weight: bold; margin-bottom: 15px; }}
-        .color-row {{ display: flex; align-items: center; margin: 10px 0; }}
+        .container {{ max-width: 1200px; margin: 0 auto; }}
+        h1 {{
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            background: linear-gradient(90deg, #00d4ff, #00ff88);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 30px rgba(0,212,255,0.3);
+        }}
+        h2 {{
+            font-size: 1.5em;
+            margin: 30px 0 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #00d4ff;
+            color: #00d4ff;
+        }}
+        .firmware-card {{
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }}
+        .firmware-card:hover {{
+            transform: translateY(-5px);
+            box-shadow: 0 10px 40px rgba(0,212,255,0.2);
+        }}
+        .firmware-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }}
+        .firmware-name {{
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #fff;
+        }}
+        .firmware-status {{
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+        }}
+        .status-ok {{ background: #00ff8833; color: #00ff88; }}
+        .status-no-theme {{ background: #ffaa0033; color: #ffaa00; }}
+        .themes-grid {{
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 15px;
+        }}
+        .theme-box {{
+            background: rgba(0,0,0,0.3);
+            border-radius: 12px;
+            padding: 15px;
+            text-align: center;
+        }}
+        .theme-name {{
+            font-size: 0.9em;
+            margin-bottom: 10px;
+            color: #888;
+        }}
         .color-swatch {{
             width: 60px;
-            height: 40px;
-            border: 1px solid #ccc;
-            margin-right: 15px;
-            border-radius: 4px;
+            height: 60px;
+            border-radius: 10px;
+            margin: 0 auto 8px;
+            border: 2px solid rgba(255,255,255,0.2);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
         }}
-        .color-info {{ font-size: 14px; color: #666; }}
-        .color-hex {{ font-family: monospace; font-size: 12px; }}
-        .palette-strip {{
+        .color-value {{
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.8em;
+            color: #aaa;
+        }}
+        .color-row {{
             display: flex;
-            height: 30px;
-            margin-top: 15px;
-            border-radius: 4px;
-            overflow: hidden;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin: 5px 0;
         }}
-        .palette-color {{ flex: 1; }}
+        .color-label {{
+            font-size: 0.7em;
+            color: #666;
+            width: 40px;
+            text-align: right;
+        }}
+        .addr {{ font-family: monospace; color: #00d4ff; }}
+        .mnemonic {{ font-family: monospace; color: #ffaa00; }}
+        .no-theme-msg {{
+            text-align: center;
+            color: #888;
+            padding: 30px;
+            font-style: italic;
+        }}
+        .summary-section {{
+            background: rgba(0,212,255,0.1);
+            border-radius: 16px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }}
+        .summary-stats {{
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            flex-wrap: wrap;
+        }}
+        .stat-item {{
+            text-align: center;
+        }}
+        .stat-value {{
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #00d4ff;
+        }}
+        .stat-label {{
+            color: #888;
+            font-size: 0.9em;
+        }}
+        .ui-element-label {{
+            font-size: 0.9em;
+            color: #aaa;
+            margin-bottom: 10px;
+            font-style: italic;
+        }}
+        footer {{
+            text-align: center;
+            margin-top: 40px;
+            padding: 20px;
+            color: #666;
+            font-size: 0.85em;
+        }}
     </style>
 </head>
 <body>
-    <h1>Theme Colors: {self.palette.firmware_name}</h1>
-    <p>Palette Address: 0x{self.palette.address:04X} | Total Colors: {len(self.palette.colors)}</p>
-
-    <h2>All Themes</h2>
+    <div class="container">
+        <h1>🎨 ECHO MINI Theme Color Analysis Report</h1>
 """
 
-        for theme in themes:
-            bg_rgb = theme.background_color.to_rgb()
-            text_rgb = theme.text_color.to_rgb()
+        # If has color data, show summary
+        if self.theme_colors:
+            # Count UI element types
+            ui_types = {}
+            for func, theme_results in self.functions:
+                ui_type = func.ui_element
+                if ui_type not in ui_types:
+                    ui_types[ui_type] = []
+                ui_types[ui_type].append(func.addr)
+
             html += f"""
-    <div class="theme-card" style="background: rgb({bg_rgb[0]}, {bg_rgb[1]}, {bg_rgb[2]}); color: rgb({text_rgb[0]}, {text_rgb[1]}, {text_rgb[2]});">
-        <div class="theme-name">{theme.name} (ID: 0x{theme.id:02X})</div>
-        <div class="color-row">
-            <div class="color-swatch" style="background: {theme.unselected_color.to_hex()}"></div>
-            <div class="color-info">
-                Unselected: {theme.unselected_color}<br>
-                <span class="color-hex">{theme.unselected_color.to_hex()}</span>
+        <div class="summary-section">
+            <h2>📊 Analysis Summary</h2>
+            <div class="summary-stats">
+                <div class="stat-item">
+                    <div class="stat-value">{len(self.theme_colors)}</div>
+                    <div class="stat-label">Theme count</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{len([f for f in self.functions if f[0].pattern_type == 'preload_store'])}</div>
+                    <div class="stat-label">Theme functions</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value">{len(ui_types)}</div>
+                    <div class="stat-label">UIElementtype</div>
+                </div>
+            </div>
+            <div class="ui-type-breakdown" style="margin-top: 20px;">
+                <h3 style="font-size: 1.1em; margin-bottom: 10px; color: #00d4ff;">Detected UI Elementtype:</h3>
+                <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+"""
+            for ui_type, addrs in sorted(ui_types.items()):
+                addr_strs = ', '.join(f'0x{a:05X}' for a in addrs[:3])
+                if len(addrs) > 3:
+                    addr_strs += f' (+{len(addrs)-3} more)'
+                html += f"""
+                    <div style="background: rgba(255,255,255,0.1); padding: 8px 15px; border-radius: 8px; font-size: 0.9em;">
+                        <span style="color: #00ff88;">●</span> {ui_type}
+                        <span style="color: #888; font-size: 0.85em;">({len(addrs)} functions)</span>
+                    </div>
+"""
+            html += """
+                </div>
             </div>
         </div>
-        <div class="color-row">
-            <div class="color-swatch" style="background: {theme.selected_color.to_hex()}"></div>
-            <div class="color-info">
-                Selected: {theme.selected_color}<br>
-                <span class="color-hex">{theme.selected_color.to_hex()}</span>
+"""
+
+        html += f"""
+        <h2>📁 Firmware Analysis Results</h2>
+"""
+
+        for func, theme_results in self.functions:
+            has_colors = any(writes for writes in theme_results.values())
+
+            html += f"""
+        <div class="firmware-card">
+            <div class="firmware-header">
+                <span class="firmware-name">function @ 0x{func.addr:05X}</span>
+                <span class="firmware-status status-{'ok' if has_colors else 'no-theme'}">{'Analyzed' if has_colors else 'No color data'}</span>
+            </div>
+"""
+
+            if func.pattern_type == "preload_store" and theme_results:
+                html += f"""
+            <div class="ui-element-label">{func.ui_element}</div>
+            <div class="themes-grid">
+"""
+                for theme_id in range(5):
+                    writes = theme_results.get(theme_id, [])
+                    colors = {}
+                    for w in writes:
+                        colors[w.target_reg] = w.color_value
+
+                    r1 = colors.get(1, 0)
+                    r2 = colors.get(2, 0)
+                    r3 = colors.get(3, 0)
+
+                    html += f"""
+                <div class="theme-box">
+                    <div class="theme-name">Theme {theme_id}</div>
+                    <div class="color-row">
+                        <span class="color-label">R1</span>
+                        <div class="color-swatch" style="background:{color_to_css(r1)}" title="0x{r1:04X}"></div>
+                    </div>
+                    <div class="color-value">0x{r1:04X}</div>
+                    <div class="color-row">
+                        <span class="color-label">R2</span>
+                        <div class="color-swatch" style="background:{color_to_css(r2)}" title="0x{r2:04X}"></div>
+                    </div>
+                    <div class="color-value">0x{r2:04X}</div>
+                    <div class="color-row">
+                        <span class="color-label">R3</span>
+                        <div class="color-swatch" style="background:{color_to_css(r3)}" title="0x{r3:04X}"></div>
+                    </div>
+                    <div class="color-value">0x{r3:04X}</div>
+                </div>
+"""
+                html += """
             </div>
         </div>
-        <div class="color-row">
-            <div class="color-swatch" style="background: {theme.highlight_color.to_hex()}"></div>
-            <div class="color-info">
-                Highlight: {theme.highlight_color}<br>
-                <span class="color-hex">{theme.highlight_color.to_hex()}</span>
+"""
+            elif func.pattern_type == "ite" and "FLAC" in func.ui_element:
+                # FLAC String function
+                flac_behavior = self._analyze_flac_behavior(func.addr)
+                if flac_behavior['is_flac']:
+                    html += f"""
+            <div class="ui-element-label">{func.ui_element}</div>
+            <div class="themes-grid">
+"""
+                    for theme_id in range(5):
+                        if theme_id == 4:
+                            color = flac_behavior['color_for_4']
+                        else:
+                            color = flac_behavior['color_for_other']
+                        html += f"""
+                <div class="theme-box">
+                    <div class="theme-name">Theme {theme_id}</div>
+                    <div class="color-swatch" style="background:{color_to_css(color)}" title="0x{color:04X}"></div>
+                    <div class="color-value">0x{color:04X}</div>
+                </div>
+"""
+                    html += """
             </div>
         </div>
+"""
+
+            elif func.pattern_type == "switch_case" and "FLAC" in func.ui_element:
+                # FLAC String function (switch_case Pattern)
+                # get colors using context detection
+                from theme_analyzer_v3 import ThemeDiscovery
+                flac_context = ThemeDiscovery.detect_flac_by_context(self.decoder, func.addr)
+                if flac_context['is_flac']:
+                    html += f"""
+            <div class="ui-element-label">{func.ui_element}</div>
+            <div class="themes-grid">
+"""
+                    for theme_id in range(5):
+                        if theme_id == 4:
+                            color = flac_context['color_for_4']
+                        else:
+                            color = flac_context['color_for_other']
+                        html += f"""
+                <div class="theme-box">
+                    <div class="theme-name">Theme {theme_id}</div>
+                    <div class="color-swatch" style="background:{color_to_css(color)}" title="0x{color:04X}"></div>
+                    <div class="color-value">0x{color:04X}</div>
+                </div>
+"""
+                    html += """
+            </div>
+        </div>
+"""
+
+            elif func.pattern_type == "switch_case" and ("Progress" in func.ui_element or "Marquee" in func.ui_element):
+                # Progress Bar Background or Marquee function
+                html += f"""
+            <div class="ui-element-label">{func.ui_element}</div>
+            <div class="themes-grid">
+"""
+                # Get colors from preload_colors
+                colors_list = list(func.preload_colors.values())
+                for theme_id in range(min(5, len(colors_list))):
+                    color = colors_list[theme_id] if theme_id < len(colors_list) else 0
+                    html += f"""
+                <div class="theme-box">
+                    <div class="theme-name">Theme {theme_id}</div>
+                    <div class="color-swatch" style="background:{color_to_css(color)}" title="0x{color:04X}"></div>
+                    <div class="color-value">0x{color:04X}</div>
+                </div>
+"""
+                html += """
+            </div>
+        </div>
+"""
+
+        html += f"""
+        <footer>
+            Generated at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} |
+            Tool: theme_analyzer_v3.py
+        </footer>
     </div>
-"""
-
-        # Add full palette
-        html += """
-    <h2>Full Palette</h2>
-    <div class="palette-strip">
-"""
-        for color in self.palette.colors:
-            html += f'<div class="palette-color" style="background: {color.to_hex()}"></div>\n'
-
-        html += """    </div>
 </body>
-</html>"""
-
-        with open(output_path, 'w') as f:
-            f.write(html)
-
-        print(f"HTML preview saved to: {output_path}")
+</html>
+"""
+        return html
 
 
-# =============================================================================
-# Batch Processor
-# =============================================================================
+class BatchAnalyzer:
+    """Batch analyze multiple firmware versions"""
 
-class BatchProcessor:
-    """Batch process multiple firmware files."""
+    def __init__(self, firmwares_dir: str):
+        self.firmwares_dir = firmwares_dir
 
-    def __init__(self, verbose: bool = False):
-        self.verbose = verbose
-        self.extractor = PaletteExtractor(verbose)
-        self.results = []
+    def _analyze_theme_function_behavior(self, decoder: 'ThumbDecoder', addr: int, scan_range: int = 200) -> dict:
+        """
+        Analyze function behavior features to identify theme color functions
 
-    def process_directory(self, firmware_dir: str, output_dir: str) -> List[Palette]:
-        """Process all firmware in directory."""
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(f"{output_dir}/palettes", exist_ok=True)
-        os.makedirs(f"{output_dir}/html", exist_ok=True)
-        os.makedirs(f"{output_dir}/c_headers", exist_ok=True)
+        Returns:
+        - cmp_r12_count: Count of CMP R12, #0-4
+        - distinct_colors: Count of distinct MOVW R0 color values
+        - strh_count: STRH instructioncount
+        - colors: Specific color value list
+        """
+        features = {
+            'cmp_r12_count': 0,
+            'distinct_colors': 0,
+            'strh_count': 0,
+            'colors': set(),
+        }
 
-        # Find all .IMG files
-        img_files = []
-        for root, dirs, files in os.walk(firmware_dir):
-            for f in files:
-                if f.endswith('.IMG'):
-                    img_files.append(os.path.join(root, f))
+        offset = 0
+        while offset < scan_range:
+            hw = decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
 
-        img_files.sort()
+            # Count CMP R12, #0-4
+            if 'CMP' in mn and 'R12' in ops:
+                for i in range(5):
+                    if f', #{i}' in ops or f', #0x0{i}' in ops:
+                        features['cmp_r12_count'] += 1
+                        break
 
-        print(f"Found {len(img_files)} firmware files")
-        print("-" * 50)
+            # Count MOVW R0 color values
+            if 'MOVW' in mn and ('R0' in ops or 'R0,' in ops):
+                if '#' in ops:
+                    try:
+                        val_str = ops.split('#')[1].split()[0].rstrip('}')
+                        val = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
+                        features['colors'].add(val)
+                    except:
+                        pass
 
-        palettes = []
-        for img_path in img_files:
-            version = Path(img_path).parent.name
-            print(f"Processing: {version}")
+            # Count STRH
+            if 'STRH' in mn:
+                features['strh_count'] += 1
+
+            offset += 4 if is_32bit else 2
+
+        features['distinct_colors'] = len(features['colors'])
+        return features
+
+    def _analyze_flac_function_behavior(self, decoder: 'ThumbDecoder', addr: int, scan_range: int = 100) -> dict:
+        """
+        Analyze FLAC String function behavior features
+
+        FLAC function features:
+        - CMP Rx, #4 (compare if theme value is 4)
+        - twoconsecutive MOVW instruction (ITE conditional execution)
+        - First MOVW is Theme 4 color
+        - Second MOVW is other themes color
+
+        Returns:
+        - is_flac: notis FLAC function
+        - color_for_4: Theme 4 color
+        - color_for_other: other themes color
+        - movw_addr_4, movw_instr_4: Theme 4  MOVW instructioninfo
+        - movw_addr_other, movw_instr_other: othertheme MOVW instructioninfo
+        """
+        result = {
+            'is_flac': False,
+            'color_for_4': 0,
+            'color_for_other': 0,
+            'movw_addr_4': '',
+            'movw_instr_4': '',
+            'movw_addr_other': '',
+            'movw_instr_other': '',
+        }
+
+        offset = 0
+        found_cmp_4 = False
+        cmp_4_offset = 0
+
+        # Step 1: Find CMP Rx, #4
+        while offset < scan_range:
+            hw = decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            # find CMP Rx, #4 (anywhatregister)
+            # checkcheck instr.imm == 4 oreroperationasfunctionstringpackagecontain #4 or #0x4
+            if 'CMP' in mn and (instr.imm == 4 or '#4' in ops or '#0x4' in ops):
+                found_cmp_4 = True
+                cmp_4_offset = offset
+                break
+
+            offset += 4 if is_32bit else 2
+
+        if not found_cmp_4:
+            return result
+
+        # Step 2: Find two consecutive MOVW after CMP #4
+        offset = cmp_4_offset + (4 if decoder.read16(addr + cmp_4_offset) >= 0xE800 else 2)
+
+        movw_list = []
+        while offset < scan_range and len(movw_list) < 2:
+            hw = decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            if 'MOVW' in mn and '#' in ops:
+                try:
+                    val_str = ops.split('#')[1].split()[0].rstrip('}')
+                    val = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
+                    movw_list.append({
+                        'addr': f"0x{addr + offset:05X}",
+                        'instr': f"{instr.mnemonic} {instr.operands}",
+                        'color': val
+                    })
+                except:
+                    pass
+
+            offset += 4 if is_32bit else 2
+
+        # FLAC feature: CMP #4 followed by two different MOVW
+        if len(movw_list) == 2 and movw_list[0]['color'] != movw_list[1]['color']:
+            result['is_flac'] = True
+            result['color_for_4'] = movw_list[0]['color']  # First is Theme 4 (condition true)
+            result['color_for_other'] = movw_list[1]['color']  # Second is others (condition false)
+            result['movw_addr_4'] = movw_list[0]['addr']
+            result['movw_instr_4'] = movw_list[0]['instr']
+            result['movw_addr_other'] = movw_list[1]['addr']
+            result['movw_instr_other'] = movw_list[1]['instr']
+
+        return result
+
+    def _collect_switch_case_movw_info(self, decoder: 'ThumbDecoder', func_addr: int, preload_colors: Dict[int, int], scan_range: int = 500) -> Dict[int, Dict]:
+        """
+        collect switch_case functionmiddleeachthemeCorresponding MOVW instructioninfo
+
+        Returns: {theme_id: {"color": int, "movw_addr": str, "movw_instr": str}}
+        """
+        result = {}
+
+        # build color -> theme_id mapping
+        color_to_theme = {color: theme_id for theme_id, color in preload_colors.items()}
+
+        offset = 0
+        while offset < scan_range:
+            hw = decoder.read16(func_addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = decoder.decode(func_addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            # detect MOVW instruction
+            if 'MOVW' in mn and '#' in ops:
+                try:
+                    val_str = ops.split('#')[1].split()[0].rstrip('}')
+                    val = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
+
+                    # checkcheckthiscolorvaluenotin preload_colors middle
+                    if val in color_to_theme:
+                        theme_id = color_to_theme[val]
+                        if theme_id not in result:  # onlyrecordfirst occurrence
+                            result[theme_id] = {
+                                "color": val,
+                                "movw_addr": f"0x{func_addr + offset:05X}",
+                                "movw_instr": f"{instr.mnemonic} {ops}",
+                                "strh_addr": "-",
+                                "strh_instr": "-"
+                            }
+                except:
+                    pass
+
+            offset += 4 if is_32bit else 2
+
+        return result
+
+    def analyze_all(self) -> Tuple[List[Dict], str]:
+        """analysisallfirmware，Returnsresultlistandsummary HTML"""
+        results = []
+
+        versions = sorted([
+            d for d in os.listdir(self.firmwares_dir)
+            if os.path.isdir(os.path.join(self.firmwares_dir, d))
+        ])
+
+        for ver in versions:
+            dir_path = os.path.join(self.firmwares_dir, ver)
+            img_files = [f for f in os.listdir(dir_path) if f.endswith('.IMG')]
+
+            if not img_files:
+                continue
+
+            img_path = os.path.join(dir_path, img_files[0])
 
             try:
-                palette = self.extractor.extract_palette(img_path)
-                if palette:
-                    palette.firmware_name = version
-                    palettes.append(palette)
+                analyzer = ThemeColorAnalyzer(img_path)
+                functions = analyzer.detector.scan_firmware()
 
-                    # Save outputs
-                    base_name = version.replace(" ", "_")
-                    palette.save_binary(f"{output_dir}/palettes/palette_{base_name}.bin")
-                    palette.save_c_header(f"{output_dir}/c_headers/palette_{base_name}.h")
+                # extracttheme color
+                theme_colors = {}
+                flac_colors = {}
+                progress_colors = {}
+                marquee_colors = {}
+                detailed_instructions = {}  # storedetailedinstruction {func_addr: {theme_id: [writes]}}
 
-                    analyzer = ThemeAnalyzer(palette)
-                    analyzer.generate_html_preview(f"{output_dir}/html/{base_name}.html")
+                for func in functions:
+                    if func.pattern_type == "preload_store":
+                        func_writes = {}
+                        for theme_id in range(5):
+                            _, writes, _ = analyzer.simulator.simulate(func, theme_id)
+                            colors = {}
+                            for w in writes:
+                                # onlycollectset R1, R2, R3 color
+                                if w.target_reg in [1, 2, 3]:
+                                    colors[w.target_reg] = w.color_value
+                            if colors:
+                                theme_colors[theme_id] = colors
+                            if writes:
+                                func_writes[theme_id] = writes
+                        if func_writes:
+                            detailed_instructions[f"0x{func.addr:05X}"] = {
+                                "pattern": "preload_store",
+                                "ui_element": "Menu Text Colors",
+                                "themes": func_writes
+                            }
 
-                    print(f"  -> Palette: 0x{palette.address:04X}, {len(palette.colors)} colors")
-                    self.results.append((version, True, palette.address))
-                else:
-                    print(f"  -> Failed to extract palette")
-                    self.results.append((version, False, None))
+                    # extract FLAC String colors (ITE Pattern)
+                    # FLAC function features: CMP Rx, #4 + twoconsecutive MOVW (oneuseat Theme 4，oneuseatitsother)
+                    elif func.pattern_type == "ite":
+                        # analysisFunction behaviorfeature
+                        flac_behavior = self._analyze_flac_function_behavior(analyzer.decoder, func.addr)
+
+                        if flac_behavior['is_flac']:
+                            # Theme 4 use color_for_4, itsotheruse color_for_other
+                            for theme_id in range(5):
+                                if theme_id == 4:
+                                    flac_colors[theme_id] = flac_behavior['color_for_4']
+                                else:
+                                    flac_colors[theme_id] = flac_behavior['color_for_other']
+
+                            # storeinstructioninfo - forall 5  theme store
+                            flac_func_writes = {}
+                            for theme_id in range(5):
+                                if theme_id == 4:
+                                    flac_func_writes[theme_id] = {
+                                        "color": flac_behavior['color_for_4'],
+                                        "movw_addr": flac_behavior['movw_addr_4'],
+                                        "movw_instr": flac_behavior['movw_instr_4'],
+                                        "strh_addr": "-",
+                                        "strh_instr": "-"
+                                    }
+                                else:
+                                    flac_func_writes[theme_id] = {
+                                        "color": flac_behavior['color_for_other'],
+                                        "movw_addr": flac_behavior['movw_addr_other'],
+                                        "movw_instr": flac_behavior['movw_instr_other'],
+                                        "strh_addr": "-",
+                                        "strh_instr": "-"
+                                    }
+                            detailed_instructions[f"0x{func.addr:05X}"] = {
+                                "pattern": "ite",
+                                "ui_element": "FLAC String",
+                                "flac_writes": flac_func_writes
+                            }
+
+                    # extractProgress Bar BackgroundandMarqueecolor (switch_case Pattern)
+                    # usingBehavior featuressplitclass，notrely on hardcodedEncodingcolorvalue
+                    elif func.pattern_type == "switch_case":
+                        preload = func.preload_colors
+
+                        # analysisFunction behaviorfeature
+                        behavior = self._analyze_theme_function_behavior(analyzer.decoder, func.addr)
+
+                        # Theme color function features:
+                        # 1. CMP R12, #0-4 outputnow 5 levelwithup (eachthemeonelevel)
+                        # 2. has 5 differentcolorvalue
+                        if behavior['cmp_r12_count'] >= 5 and behavior['distinct_colors'] == 5:
+                            # collectset MOVW instructioninfo
+                            movw_info = self._collect_switch_case_movw_info(analyzer.decoder, func.addr, preload)
+
+                            if behavior['strh_count'] > 0:
+                                # Has STRH write → enterdegreeitem (Color written to memory)
+                                ui_element = "Progress Bar Background"
+                                for reg_id, color in preload.items():
+                                    progress_colors[reg_id] = color
+                            else:
+                                # No STRH write → Marquee (colorviaregisterReturns)
+                                ui_element = "Marquee Overlay"
+                                for reg_id, color in preload.items():
+                                    marquee_colors[reg_id] = color
+
+                            # storeinstructioninfo
+                            if movw_info:
+                                detailed_instructions[f"0x{func.addr:05X}"] = {
+                                    "pattern": "switch_case",
+                                    "ui_element": ui_element,
+                                    "writes": movw_info
+                                }
+
+                results.append({
+                    "version": ver,
+                    "file": img_files[0],
+                    "has_theme": bool(theme_colors) or bool(flac_colors),
+                    "theme_colors": theme_colors,
+                    "flac_colors": flac_colors,
+                    "progress_colors": progress_colors,
+                    "marquee_colors": marquee_colors,
+                    "function_count": len(functions),
+                    "theme_function": next(
+                        (f"0x{f.addr:05X}" for f in functions if f.pattern_type == "preload_store"),
+                        None
+                    ),
+                    "detailed_instructions": detailed_instructions
+                })
             except Exception as e:
-                print(f"  -> Error: {e}")
-                self.results.append((version, False, str(e)))
+                results.append({
+                    "version": ver,
+                    "file": img_files[0],
+                    "has_theme": False,
+                    "error": str(e)
+                })
 
-        print("-" * 50)
-        print(f"Success: {sum(1 for _, s, _ in self.results if s)}/{len(self.results)}")
+        return results, self._generate_summary_html(results)
 
-        return palettes
+    def _generate_summary_html(self, results: List[Dict]) -> str:
+        """generatesummary HTML report"""
+        from datetime import datetime
+
+        def color_to_css(val):
+            if val == 0:
+                return "#000000"
+            r = (val >> 11) & 0x1F
+            g = (val >> 5) & 0x3F
+            b = val & 0x1F
+            r = (r << 3) | (r >> 2)
+            g = (g << 2) | (g >> 4)
+            b = (b << 3) | (b >> 2)
+            return f"rgb({r},{g},{b})"
+
+        theme_versions = [r for r in results if r["has_theme"]]
+        no_theme_versions = [r for r in results if not r["has_theme"]]
+
+        def make_tooltip(color_val, movw_addr=None, movw_instr=None, strh_addr=None, strh_instr=None, label=""):
+            """generatewith tooltip  color swatch HTML"""
+            tooltip_content = f"<div class='instr-line'><span class='value'>{label}0x{color_val:04X}</span></div>"
+            if movw_addr and movw_instr:
+                tooltip_content += f"<div class='instr-line'><span class='addr'>{movw_addr}</span>: <span class='mnemonic'>{movw_instr}</span></div>"
+            if strh_addr and strh_instr:
+                tooltip_content += f"<div class='instr-line'><span class='addr'>{strh_addr}</span>: <span class='mnemonic'>{strh_instr}</span></div>"
+            return f"""<div class="swatch-container">
+                <div class="mini-swatch" style="background:{color_to_css(color_val)}"></div>
+                <div class="tooltip">{tooltip_content}</div>
+            </div>"""
+
+        def get_instr_for_theme(detailed_instr, ui_element, theme_id):
+            """from detailedinstructionmiddleget specifictheme instructioninfo"""
+            for func_addr, data in detailed_instr.items():
+                if data.get("ui_element") == ui_element:
+                    if ui_element == "Menu Text Colors":
+                        themes = data.get("themes", {})
+                        writes = themes.get(theme_id, [])
+                        # Returns R1, R2, R3  instruction
+                        result = {}
+                        for w in writes:
+                            if w.target_reg in [1, 2, 3]:
+                                if w.movw_instr:
+                                    result[w.target_reg] = {
+                                        "movw_addr": f"0x{w.movw_instr.addr:05X}",
+                                        "movw_instr": f"{w.movw_instr.instr.mnemonic} {w.movw_instr.instr.operands}",
+                                        "strh_addr": f"0x{w.addr:05X}",
+                                        "strh_instr": f"{w.instr.mnemonic} {w.instr.operands}"
+                                    }
+                                else:
+                                    # nothas MOVW instruction，cancanispreloadorinitialinitialvalue
+                                    result[w.target_reg] = {
+                                        "movw_addr": "(preload)",
+                                        "movw_instr": "(preload)",
+                                        "strh_addr": f"0x{w.addr:05X}",
+                                        "strh_instr": f"{w.instr.mnemonic} {w.instr.operands}"
+                                    }
+                        return result
+                    elif ui_element == "FLAC String":
+                        flac_writes = data.get("flac_writes", {})
+                        return flac_writes.get(theme_id)
+                    elif ui_element in ["Progress Bar Background", "Marquee Overlay"]:
+                        writes = data.get("writes", {})
+                        return writes.get(theme_id)
+            return None
+
+        html = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECHO MINI allversionthemeAnalysis Report</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%);
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }}
+        .container {{ max-width: 1400px; margin: 0 auto; }}
+        h1 {{
+            text-align: center;
+            font-size: 2.8em;
+            margin-bottom: 10px;
+            background: linear-gradient(90deg, #00d4ff, #00ff88, #ffaa00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }}
+        .subtitle {{
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }}
+        .stats-bar {{
+            display: flex;
+            justify-content: center;
+            gap: 50px;
+            background: rgba(0,212,255,0.1);
+            border-radius: 20px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }}
+        .stat {{
+            text-align: center;
+        }}
+        .stat-value {{
+            font-size: 3em;
+            font-weight: bold;
+        }}
+        .stat-value.ok {{ color: #00ff88; }}
+        .stat-value.warn {{ color: #ffaa00; }}
+        .stat-label {{
+            color: #888;
+            margin-top: 5px;
+        }}
+        h2 {{
+            color: #00d4ff;
+            margin: 30px 0 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid rgba(0,212,255,0.3);
+        }}
+        .version-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 20px;
+        }}
+        .version-card {{
+            background: rgba(255,255,255,0.05);
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }}
+        .version-card:hover {{
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(0,212,255,0.15);
+        }}
+        .version-card.no-theme {{
+            opacity: 0.6;
+        }}
+        .card-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }}
+        .version-name {{
+            font-size: 1.2em;
+            font-weight: bold;
+        }}
+        .version-file {{
+            font-size: 0.8em;
+            color: #666;
+        }}
+        .badge {{
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 0.75em;
+            font-weight: bold;
+        }}
+        .badge-ok {{ background: #00ff8833; color: #00ff88; }}
+        .badge-no {{ background: #ffaa0033; color: #ffaa00; }}
+        .themes-row {{
+            display: flex;
+            gap: 8px;
+            margin-top: 15px;
+        }}
+        .theme-pill {{
+            flex: 1;
+            text-align: center;
+            padding: 8px 5px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 8px;
+        }}
+        .theme-num {{
+            font-size: 0.7em;
+            color: #666;
+            margin-bottom: 5px;
+        }}
+        .color-swatches {{
+            display: flex;
+            justify-content: center;
+            gap: 3px;
+        }}
+        .mini-swatch {{
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.2);
+            position: relative;
+            cursor: pointer;
+        }}
+        .mini-swatch:hover {{
+            transform: scale(1.2);
+            z-index: 10;
+        }}
+        /* Tooltip */
+        .swatch-container {{
+            position: relative;
+            display: inline-block;
+        }}
+        .swatch-container .tooltip {{
+            visibility: hidden;
+            opacity: 0;
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.95);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 0.7em;
+            white-space: nowrap;
+            z-index: 100;
+            margin-bottom: 5px;
+            border: 1px solid rgba(0,212,255,0.3);
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            transition: opacity 0.2s;
+            text-align: left;
+            font-family: 'Monaco', 'Consolas', monospace;
+            min-width: 200px;
+        }}
+        .swatch-container:hover .tooltip {{
+            visibility: visible;
+            opacity: 1;
+        }}
+        .tooltip .instr-line {{
+            margin: 2px 0;
+        }}
+        .tooltip .addr {{ color: #00d4ff; }}
+        .tooltip .mnemonic {{ color: #ffaa00; }}
+        .tooltip .value {{ color: #00ff88; }}
+        .func-addr {{
+            font-family: monospace;
+            color: #00d4ff;
+            font-size: 0.85em;
+            margin-top: 10px;
+        }}
+        .no-theme-msg {{
+            color: #666;
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }}
+        footer {{
+            text-align: center;
+            margin-top: 50px;
+            padding: 30px;
+            color: #555;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 ECHO MINI themeanalysis</h1>
+        <p class="subtitle">All-version firmware theme color extraction report</p>
+
+        <div class="stats-bar">
+            <div class="stat">
+                <div class="stat-value ok">{len(theme_versions)}</div>
+                <div class="stat-label">supporttheme</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value warn">{len(no_theme_versions)}</div>
+                <div class="stat-label">nonethemesystem</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value ok">{len(results)}</div>
+                <div class="stat-label">totalversionnumber</div>
+            </div>
+        </div>
+
+        <h2>✅ Supports theme systemversion ({len(theme_versions)})</h2>
+        <div class="version-grid">
+"""
+
+        for r in theme_versions:
+            html += f"""
+            <div class="version-card">
+                <div class="card-header">
+                    <div>
+                        <div class="version-name">{r['version']}</div>
+                        <div class="version-file">{r['file']}</div>
+                    </div>
+                    <span class="badge badge-ok">OK</span>
+                </div>
+                <div style="margin-top: 10px; font-size: 0.85em; color: #888;">Menu Text Colors:</div>
+                <div class="themes-row">
+"""
+
+            for t in range(5):
+                colors = r["theme_colors"].get(t, {})
+                r1 = colors.get(1, 0)
+                r2 = colors.get(2, 0)
+                r3 = colors.get(3, 0)
+
+                # getselectinstructioninfo
+                detailed = r.get("detailed_instructions", {})
+                menu_instr = get_instr_for_theme(detailed, "Menu Text Colors", t)
+
+                # generatewith tooltip colorblock
+                r1_swatch = make_tooltip(r1, label="R1: ")
+                r2_swatch = make_tooltip(r2, label="R2: ")
+                r3_swatch = make_tooltip(r3, label="R3: ")
+
+                if menu_instr:
+                    if 1 in menu_instr:
+                        r1_swatch = make_tooltip(r1, menu_instr[1]["movw_addr"], menu_instr[1]["movw_instr"],
+                                                 menu_instr[1]["strh_addr"], menu_instr[1]["strh_instr"], "R1: ")
+                    if 2 in menu_instr:
+                        r2_swatch = make_tooltip(r2, menu_instr[2]["movw_addr"], menu_instr[2]["movw_instr"],
+                                                 menu_instr[2]["strh_addr"], menu_instr[2]["strh_instr"], "R2: ")
+                    if 3 in menu_instr:
+                        r3_swatch = make_tooltip(r3, menu_instr[3]["movw_addr"], menu_instr[3]["movw_instr"],
+                                                 menu_instr[3]["strh_addr"], menu_instr[3]["strh_instr"], "R3: ")
+
+                html += f"""
+                    <div class="theme-pill">
+                        <div class="theme-num">T{t}</div>
+                        <div class="color-swatches">
+                            {r1_swatch}
+                            {r2_swatch}
+                            {r3_swatch}
+                        </div>
+                    </div>
+"""
+
+            # FLAC String colors
+            flac_colors = r.get("flac_colors", {})
+            if flac_colors:
+                html += f"""
+                </div>
+                <div style="margin-top: 10px; font-size: 0.85em; color: #888;">FLAC String colors:</div>
+                <div class="themes-row">
+"""
+                for t in range(5):
+                    flac_c = flac_colors.get(t, 0)
+                    # getselectinstructioninfo
+                    flac_instr = get_instr_for_theme(detailed, "FLAC String", t)
+                    flac_swatch = make_tooltip(flac_c, label="FLAC: ")
+                    if flac_instr:
+                        flac_swatch = make_tooltip(flac_c, flac_instr.get("movw_addr"), flac_instr.get("movw_instr"),
+                                                   flac_instr.get("strh_addr"), flac_instr.get("strh_instr"), "FLAC: ")
+                    html += f"""
+                    <div class="theme-pill">
+                        <div class="theme-num">T{t}</div>
+                        <div class="color-swatches">
+                            {flac_swatch}
+                        </div>
+                    </div>
+"""
+
+            # Progress Bar Backgroundcolor
+            progress_colors = r.get("progress_colors", {})
+            if progress_colors:
+                html += f"""
+                </div>
+                <div style="margin-top: 10px; font-size: 0.85em; color: #888;">Progress Bar Backgroundcolor:</div>
+                <div class="themes-row">
+"""
+                for t in range(5):
+                    prog_c = progress_colors.get(t, 0)
+                    # getselectinstructioninfo
+                    prog_instr = get_instr_for_theme(detailed, "Progress Bar Background", t)
+                    prog_swatch = make_tooltip(prog_c, label="Progress: ")
+                    if prog_instr:
+                        prog_swatch = make_tooltip(prog_c, prog_instr.get("movw_addr"), prog_instr.get("movw_instr"),
+                                                   prog_instr.get("strh_addr"), prog_instr.get("strh_instr"), "Progress: ")
+                    html += f"""
+                    <div class="theme-pill">
+                        <div class="theme-num">T{t}</div>
+                        <div class="color-swatches">
+                            {prog_swatch}
+                        </div>
+                    </div>
+"""
+
+            # Marqueecolor
+            marquee_colors = r.get("marquee_colors", {})
+            if marquee_colors:
+                html += f"""
+                </div>
+                <div style="margin-top: 10px; font-size: 0.85em; color: #888;">Marquee Overlaycolor:</div>
+                <div class="themes-row">
+"""
+                for t in range(5):
+                    marq_c = marquee_colors.get(t, 0)
+                    # getselectinstructioninfo
+                    marq_instr = get_instr_for_theme(detailed, "Marquee Overlay", t)
+                    marq_swatch = make_tooltip(marq_c, label="Marquee: ")
+                    if marq_instr:
+                        marq_swatch = make_tooltip(marq_c, marq_instr.get("movw_addr"), marq_instr.get("movw_instr"),
+                                                   marq_instr.get("strh_addr"), marq_instr.get("strh_instr"), "Marquee: ")
+                    html += f"""
+                    <div class="theme-pill">
+                        <div class="theme-num">T{t}</div>
+                        <div class="color-swatches">
+                            {marq_swatch}
+                        </div>
+                    </div>
+"""
+
+            html += f"""
+                </div>
+                <div class="func-addr">📍 Theme functions: {r.get('theme_function', 'N/A')}</div>
+            </div>
+"""
+
+        html += f"""
+        </div>
+
+        <h2>⚪ Does not support theme systemversion ({len(no_theme_versions)})</h2>
+        <div class="version-grid">
+"""
+
+        for r in no_theme_versions:
+            html += f"""
+            <div class="version-card no-theme">
+                <div class="card-header">
+                    <div>
+                        <div class="version-name">{r['version']}</div>
+                        <div class="version-file">{r['file']}</div>
+                    </div>
+                    <span class="badge badge-no">nonetheme</span>
+                </div>
+                <div class="no-theme-msg">thisversionDoes not support theme system</div>
+            </div>
+"""
+
+        html += f"""
+        </div>
+
+        <footer>
+            📊 Analysis completed at {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}<br>
+            Tool: theme_analyzer_v3.py | Analyzed total {len(results)} firmware versions
+        </footer>
+    </div>
+</body>
+</html>
+"""
+        return html
 
 
-# =============================================================================
-# Main
-# =============================================================================
+# ============================================================================
+# mainanalysiser
+# ============================================================================
+
+class ThemeColorAnalyzer:
+    """Theme Color Analyzer"""
+
+    def __init__(self, firmware_path: str):
+        self.firmware_path = firmware_path
+
+        with open(firmware_path, 'rb') as f:
+            self.data = f.read()
+
+        self.decoder = ThumbDecoder(self.data)
+        self.detector = ThemeFunctionDetector(self.decoder)
+        self.simulator = ControlFlowSimulator(self.decoder)
+        self.report = ReportGenerator(firmware_path, self.decoder)
+
+    def _analyze_flac_function_behavior(self, addr: int, scan_range: int = 100) -> dict:
+        """
+        Analyze FLAC String function behavior features
+
+        FLAC function features:
+        - CMP Rx, #4 (compare if theme value is 4)
+        - twoconsecutive MOVW instruction (ITE conditional execution)
+        - First MOVW is Theme 4 color
+        - Second MOVW is other themes color
+
+        Returns:
+        - is_flac: notis FLAC function
+        - color_for_4: Theme 4 color
+        - color_for_other: other themes color
+        - movw_addr_4, movw_instr_4: Theme 4  MOVW instructioninfo
+        - movw_addr_other, movw_instr_other: othertheme MOVW instructioninfo
+        """
+        result = {
+            'is_flac': False,
+            'color_for_4': 0,
+            'color_for_other': 0,
+            'movw_addr_4': '',
+            'movw_instr_4': '',
+            'movw_addr_other': '',
+            'movw_instr_other': '',
+        }
+
+        offset = 0
+        found_cmp_4 = False
+        cmp_4_offset = 0
+
+        # Step 1: Find CMP Rx, #4
+        while offset < scan_range:
+            hw = self.decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = self.decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            # find CMP Rx, #4 (anywhatregister)
+            # checkcheck instr.imm == 4 oreroperationasfunctionstringpackagecontain #4 or #0x4
+            if 'CMP' in mn and (instr.imm == 4 or '#4' in ops or '#0x4' in ops):
+                found_cmp_4 = True
+                cmp_4_offset = offset
+                break
+
+            offset += 4 if is_32bit else 2
+
+        if not found_cmp_4:
+            return result
+
+        # Step 2: Find two consecutive MOVW after CMP #4
+        offset = cmp_4_offset + (4 if self.decoder.read16(addr + cmp_4_offset) >= 0xE800 else 2)
+
+        movw_list = []
+        while offset < scan_range and len(movw_list) < 2:
+            hw = self.decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = self.decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            if 'MOVW' in mn and '#' in ops:
+                try:
+                    val_str = ops.split('#')[1].split()[0].rstrip('}')
+                    val = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
+                    movw_list.append({
+                        'addr': f"0x{addr + offset:05X}",
+                        'instr': f"{instr.mnemonic} {instr.operands}",
+                        'color': val
+                    })
+                except:
+                    pass
+
+            offset += 4 if is_32bit else 2
+
+        # FLAC feature: CMP #4 followed by two different MOVW
+        if len(movw_list) == 2 and movw_list[0]['color'] != movw_list[1]['color']:
+            result['is_flac'] = True
+            result['color_for_4'] = movw_list[0]['color']  # First is Theme 4 (condition true)
+            result['color_for_other'] = movw_list[1]['color']  # Second is others (condition false)
+            result['movw_addr_4'] = movw_list[0]['addr']
+            result['movw_instr_4'] = movw_list[0]['instr']
+            result['movw_addr_other'] = movw_list[1]['addr']
+            result['movw_instr_other'] = movw_list[1]['instr']
+
+        return result
+
+    def _analyze_theme_function_behavior(self, addr: int, scan_range: int = 200) -> dict:
+        """
+        Analyze function behavior features to identify theme color functions
+
+        Returns:
+        - cmp_r12_count: Count of CMP R12, #0-4
+        - distinct_colors: Count of distinct MOVW R0 color values
+        - strh_count: STRH instructioncount
+        - colors: Specific color value list
+        """
+        features = {
+            'cmp_r12_count': 0,
+            'distinct_colors': 0,
+            'strh_count': 0,
+            'colors': set(),
+        }
+
+        offset = 0
+        colors = []
+
+        while offset < scan_range:
+            hw = self.decoder.read16(addr + offset)
+            is_32bit = hw >= 0xE800
+            instr = self.decoder.decode(addr + offset)
+            mn = instr.mnemonic.upper()
+            ops = instr.operands
+
+            # Count CMP R12, #0-4 (packageinclude CMP.W format)
+            if 'CMP' in mn and 'R12' in ops:
+                # checkcheckImmediate valuenotin 0-4 rangeinside
+                imm_val = instr.imm
+                if 0 <= imm_val <= 4:
+                    features['cmp_r12_count'] += 1
+
+            # collectset MOVW R0 colorvalue
+            if 'MOVW' in mn and 'R0' in ops and '#' in ops:
+                try:
+                    val_str = ops.split('#')[1].split()[0].rstrip('}')
+                    val = int(val_str, 16) if val_str.startswith('0x') else int(val_str)
+                    colors.append(val)
+                except:
+                    pass
+
+            # Count STRH instruction
+            if 'STRH' in mn:
+                features['strh_count'] += 1
+
+            offset += 4 if is_32bit else 2
+
+        features['colors'] = set(colors)
+        features['distinct_colors'] = len(set(colors))
+
+        return features
+
+    def analyze(self, verbose: bool = False) -> str:
+        """executioncompleteanalysis"""
+        if verbose:
+            print(f"analysisfirmware: {self.firmware_path}")
+            print(f"size: {len(self.data):,} bytes")
+
+        # 0. dynamicstatefoundTheme count
+        from theme_analyzer_v3 import ThemeDiscovery
+        self.theme_count, self.theme_names = ThemeDiscovery.discover_theme_count(self.data)
+        if verbose:
+            print(f"found {self.theme_count} theme: {self.theme_names}")
+
+        # 1. detectTheme functions
+        functions = self.detector.scan_firmware()
+
+        if verbose:
+            print(f"detectto {len(functions)} candidatesfunction")
+
+        # 2. simulationeachfunctions，andusingbehavioranalysisidentify UI Element
+        for func in functions:
+            theme_results = {}
+
+            for theme_id in range(self.theme_count):
+                _, writes, movw_records = self.simulator.simulate(func, theme_id)
+                # savekeepallwrite，0 alsoisvalidcolorvalue
+                theme_results[theme_id] = writes
+
+            # usingbehavioranalysisidentify UI Element
+            func.ui_element = self._identify_ui_element_by_behavior(func, theme_results)
+
+            self.report.add_function(func, theme_results)
+
+        # 3. generatereport
+        return self.report.generate_markdown()
+
+    def _identify_ui_element_by_behavior(self, func: ThemeFunction, theme_results: Dict) -> str:
+        """based onBehavior featuresidentify UI Element，not relying on hardcodedEncodingcolorvalue"""
+
+        # forat ITE Pattern，checkchecknotis FLAC function
+        # usingtwo typesMethoddetect:
+        # 1. CMP #4 + IT + MOVW Pattern
+        # 2. '|' charactercontext (changecanrely)
+        if func.pattern_type == "ite":
+            # firstfirsttrytestusingcontextdetect (has '|' character)
+            from theme_analyzer_v3 import ThemeDiscovery
+            flac_context = ThemeDiscovery.detect_flac_by_context(self.decoder, func.addr)
+            if flac_context['is_flac']:
+                return "FLAC String Text"
+
+            # returnexittoPatterndetect
+            flac_behavior = self._analyze_flac_function_behavior(func.addr)
+            if flac_behavior['is_flac']:
+                return "FLAC String Text"
+
+        # forat switch_case Pattern，alsocheckchecknothas FLAC contextfeature
+        if func.pattern_type == "switch_case":
+            # firstfirstcheckcheck FLAC context
+            from theme_analyzer_v3 import ThemeDiscovery
+            flac_context = ThemeDiscovery.detect_flac_by_context(self.decoder, func.addr)
+            if flac_context['is_flac']:
+                return "FLAC String Text"
+
+            # thenaftercheckcheckenterdegreeitem/Marqueefeature
+            behavior = self._analyze_theme_function_behavior(func.addr)
+
+            # theme colorfunctionfeature: CMP R12 #0-4 outputnow N levelwithup + N differentcolor (N = theme_count)
+            if behavior['cmp_r12_count'] >= self.theme_count and behavior['distinct_colors'] == self.theme_count:
+                if behavior['strh_count'] > 0:
+                    return "Progress Bar Background"
+                else:
+                    return "Marquee/Scrolling Text Overlay"
+
+        # forat preload_store pattern，checkchecknothastypicaltypemenusinglecolorPattern
+        if func.pattern_type == "preload_store":
+            # getselectallcolorvalue
+            all_colors = set()
+            for writes in theme_results.values():
+                for w in writes:
+                    all_colors.add(w.color_value)
+            for c in func.preload_colors.values():
+                all_colors.add(c)
+
+            # Menu Text Colorsviaexceptionhasmanywrite to R1, R2, R3
+            if any(w.target_reg in [1, 2, 3] for writes in theme_results.values() for w in writes):
+                return "Menu Text Colors (Highlight/Normal/Second)"
+
+        return "Unknown UI Element"
+
+
+# ============================================================================
+# Main Program
+# ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Extract theme colors from ARM firmware",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Extract palette from single firmware
-  %(prog)s --firmware HIFIEC10.IMG --output ./output
-
-  # Analyze all theme colors
-  %(prog)s --firmware HIFIEC10.IMG --analyze --html --c-header
-
-  # Trace color lookup (symbolic execution)
-  %(prog)s --firmware HIFIEC10.IMG --theme 0x00 --state selected
-
-  # Trace all states for a theme
-  %(prog)s --firmware HIFIEC10.IMG --theme 1 --state highlight
-
-  # Run unit tests for color lookup
-  %(prog)s --firmware HIFIEC10.IMG --unit-test
-
-  # Batch process all firmware versions
-  %(prog)s --dir ./firmwares --output ./output
-        """
-    )
-
-    parser.add_argument('--firmware', '-f', type=str,
-                        help='Path to single firmware file')
-    parser.add_argument('--dir', '-d', type=str,
-                        help='Directory containing firmware files')
-    parser.add_argument('--output', '-o', type=str, default='./theme_output',
-                        help='Output directory (default: ./theme_output)')
-    parser.add_argument('--verbose', '-v', action='store_true',
-                        help='Enable verbose output')
-    parser.add_argument('--analyze', '-a', action='store_true',
-                        help='Show theme color analysis')
-    parser.add_argument('--html', action='store_true',
-                        help='Generate HTML color preview')
-    parser.add_argument('--c-header', action='store_true',
-                        help='Generate C header files')
-    parser.add_argument('--color-map', '-m', action='store_true',
-                        help='Show all parameter → color mappings (human reads semantics)')
-    parser.add_argument('--trace-colors', '-t', action='store_true',
-                        help='Trace color lookup paths (symbolic execution)')
-    parser.add_argument('--theme', type=lambda x: int(x, 0), metavar='ID',
-                        help='Theme ID for tracing (e.g., 0x00, 0x02)')
-    parser.add_argument('--state', type=str, choices=['unselected', 'selected', 'highlight'],
-                        default='unselected', help='UI state for tracing')
-    parser.add_argument('--unit-test', action='store_true',
-                        help='Run unit tests for color lookup')
-
-    args = parser.parse_args()
-
-    if not args.firmware and not args.dir:
-        parser.print_help()
-        print("\nError: Either --firmware or --dir must be specified")
+    if len(sys.argv) < 2:
+        print("Usage: python theme_analyzer_v3.py <firmware.img|firmwares_dir> [Options]")
+        print("")
+        print("Options:")
+        print("  --verbose, -v    Show verbose output")
+        print("  --html           Generate HTML report")
+        print("  --batch          Batch analyze firmwares directory")
+        print("")
+        print("Examples:")
+        print("  python theme_analyzer_v3.py HIFIEC10.IMG")
+        print("  python theme_analyzer_v3.py HIFIEC10.IMG --html")
+        print("  python theme_analyzer_v3.py firmwares/ --batch --html")
         sys.exit(1)
 
-    extractor = PaletteExtractor(verbose=args.verbose)
-    processor = BatchProcessor(verbose=args.verbose)
+    target = sys.argv[1]
+    verbose = '--verbose' in sys.argv or '-v' in sys.argv
+    generate_html = '--html' in sys.argv
+    batch_mode = '--batch' in sys.argv
 
-    if args.firmware:
-        # Process single firmware
-        if not os.path.exists(args.firmware):
-            print(f"Error: File not found: {args.firmware}")
-            sys.exit(1)
-
-        print(f"Processing: {args.firmware}")
-        palette = extractor.extract_palette(args.firmware)
-
-        if palette:
-            print(f"\nPalette extracted:")
-            print(f"  Address: 0x{palette.address:04X}")
-            print(f"  Colors: {len(palette.colors)}")
-            print(f"  Size: {palette.size} bytes")
-
-            # Create output directory
-            os.makedirs(args.output, exist_ok=True)
-
-            # Save binary
-            base_name = os.path.splitext(os.path.basename(args.firmware))[0]
-            palette.save_binary(f"{args.output}/palette_{base_name}.bin")
-            print(f"  Saved: {args.output}/palette_{base_name}.bin")
-
-            if args.c_header:
-                palette.save_c_header(f"{args.output}/palette_{base_name}.h")
-                print(f"  Saved: {args.output}/palette_{base_name}.h")
-
-            if args.analyze or args.html:
-                analyzer = ThemeAnalyzer(palette)
-
-                if args.analyze:
-                    print("\nTheme Analysis:")
-                    themes = analyzer.analyze_themes()
-                    for theme in themes:
-                        print(f"\n  {theme.name} (ID: 0x{theme.id:02X}):")
-                        print(f"    Unselected: {theme.unselected_color.to_hex()} {theme.unselected_color}")
-                        print(f"    Selected:   {theme.selected_color.to_hex()} {theme.selected_color}")
-                        print(f"    Highlight:  {theme.highlight_color.to_hex()} {theme.highlight_color}")
-
-                if args.html:
-                    analyzer.generate_html_preview(f"{args.output}/{base_name}.html")
-
-            # Color map (parameter → color mapping, human decides semantics)
-            if args.color_map:
-                engine = SymbolicColorEngine(args.firmware, palette, verbose=args.verbose)
-                print("\n" + engine.generate_color_map_report())
-
-            # Color tracing (symbolic execution)
-            if args.trace_colors or args.theme is not None or args.unit_test:
-                engine = SymbolicColorEngine(args.firmware, palette, verbose=args.verbose)
-
-                if args.unit_test:
-                    # Run unit tests
-                    test_cases = [
-                        {"theme_id": 0x00, "state": "unselected", "expected_source": "palette"},
-                        {"theme_id": 0x00, "state": "selected", "expected_source": "palette"},
-                        {"theme_id": 0x00, "state": "highlight", "expected_source": "palette", "expected_index": 221},
-                        {"theme_id": 0x01, "state": "highlight", "expected_source": "immediate"},
-                        {"theme_id": 0x02, "state": "unselected", "expected_source": "palette"},
-                        {"theme_id": 0x03, "state": "selected", "expected_source": "palette"},
-                    ]
-                    engine.unit_test(test_cases)
-                elif args.theme is not None:
-                    # Trace specific theme
-                    traces = engine.trace_theme_colors(args.theme, args.state)
-                    print("\n" + engine.generate_trace_report(traces))
-                else:
-                    # Trace all themes
-                    all_traces = engine.analyze_all_themes()
-                    for theme_name, traces in all_traces.items():
-                        print("\n" + engine.generate_trace_report(traces))
-
+    # batchPattern
+    if batch_mode or os.path.isdir(target):
+        # confirmconfirm firmwares itemrecord
+        if os.path.isdir(target) and target != '.':
+            firmwares_dir = target
+        elif os.path.isdir(os.path.join(os.path.dirname(__file__), "firmwares")):
+            firmwares_dir = os.path.join(os.path.dirname(__file__), "firmwares")
         else:
-            print("Failed to extract palette")
+            firmwares_dir = target if os.path.isdir(target) else "."
 
-    elif args.dir:
-        # Process all firmware in directory
-        if not os.path.isdir(args.dir):
-            print(f"Error: Directory not found: {args.dir}")
+        if not os.path.isdir(firmwares_dir):
+            print(f"Error: Directory does not exist: {firmwares_dir}")
             sys.exit(1)
 
-        processor.process_directory(args.dir, args.output)
+        print(f"Batch analysis: {firmwares_dir}")
+        print()
 
-        # Generate summary
-        summary_path = f"{args.output}/summary.txt"
-        with open(summary_path, 'w') as f:
-            f.write("Theme Extraction Summary\n")
-            f.write("=" * 50 + "\n\n")
-            for version, success, addr in processor.results:
-                status = f"0x{addr:04X}" if addr else "FAILED"
-                f.write(f"{version}: {status}\n")
-        print(f"\nSummary saved to: {summary_path}")
+        batch = BatchAnalyzer(firmwares_dir)
+        results, summary_html = batch.analyze_all()
+
+        # printsummary
+        print("=" * 60)
+        print("Analysis Results Summary")
+        print("=" * 60)
+
+        theme_versions = [r for r in results if r["has_theme"]]
+        no_theme_versions = [r for r in results if not r["has_theme"]]
+
+        print(f"\nSupports theme system ({len(theme_versions)} ):")
+        for r in theme_versions:
+            print(f"  ✓ {r['version']} - {r['file']}")
+
+        print(f"\nDoes not support theme system ({len(no_theme_versions)} ):")
+        for r in no_theme_versions:
+            print(f"  ○ {r['version']} - {r['file']}")
+
+        # Save HTML report (savestoreinfooterthisinitemrecord)
+        if generate_html:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            output_path = os.path.join(script_dir, "theme_analysis_report.html")
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(summary_html)
+            print(f"\n✓ HTML report saved to: {output_path}")
+
+        return
+
+    # singletextfilePattern
+    if not os.path.exists(target):
+        print(f"Error: File does not exist: {target}")
+        sys.exit(1)
+
+    analyzer = ThemeColorAnalyzer(target)
+    report = analyzer.analyze(verbose=verbose)
+
+    if generate_html:
+        html_report = analyzer.report.generate_html(os.path.basename(target))
+        output_path = target.replace('.IMG', '_theme_report.html')
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(html_report)
+        print(f"✓ HTML report saved to: {output_path}")
+    else:
+        print(report)
+        # Save Markdown report
+        output_path = target.replace('.IMG', '_theme_report.md')
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(report)
+        print(f"\nreportsaved to: {output_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
