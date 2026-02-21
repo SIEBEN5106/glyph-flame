@@ -122,21 +122,21 @@ export function createColorMap(): ThemeColorMap {
  */
 export interface FlacBehavior {
 	/** Type of FLAC behavior */
-	readonly type: 'standard' | 'bypass' | 'unknown';
+	type: 'standard' | 'bypass' | 'unknown';
 	/** Whether this is confirmed as FLAC function */
-	readonly isFlac: boolean;
+	isFlac: boolean;
 	/** Color value for theme ID 4 */
-	readonly colorFor4: number;
+	colorFor4: number;
 	/** Color value for other themes (non-4) */
-	readonly colorForOther: number;
+	colorForOther: number;
 	/** Address of MOVW instruction for theme 4 */
-	readonly movwAddr4: string;
+	movwAddr4: string;
 	/** MOVW instruction for theme 4 */
-	readonly movwInstr4: string;
+	movwInstr4: string;
 	/** Address of MOVW instruction for other themes */
-	readonly movwAddrOther: string;
+	movwAddrOther: string;
 	/** MOVW instruction for other themes */
-	readonly movwInstrOther: string;
+	movwInstrOther: string;
 }
 
 /**
@@ -144,13 +144,13 @@ export interface FlacBehavior {
  */
 export interface MenuBehavior {
 	/** Count of CMP R12, #0-4 instructions */
-	readonly cmpR12Count: number;
+	cmpR12Count: number;
 	/** Count of distinct MOVW R0 color values */
-	readonly distinctColors: number;
+	distinctColors: number;
 	/** Count of STRH instructions */
-	readonly strhCount: number;
+	strhCount: number;
 	/** Set of color values found */
-	readonly colors: Set<number>;
+	colors: Set<number>;
 }
 
 /**

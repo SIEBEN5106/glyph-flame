@@ -252,7 +252,16 @@ export class ThemeDiscovery {
 		}
 
 		if (!foundSeparator) {
-			return { type: 'unknown' };
+			return {
+				type: 'unknown',
+				isFlac: false,
+				colorFor4: 0,
+				colorForOther: 0,
+				movwAddr4: '',
+				movwInstr4: '',
+				movwAddrOther: '',
+				movwInstrOther: ''
+			};
 		}
 
 		// Step 2: Search for FLAC color pattern after separator
@@ -268,7 +277,16 @@ export class ThemeDiscovery {
 					const nextHw = decoder.readU16(funcAddr + offset + (is32bit ? 4 : 2));
 					if ((nextHw & 0xff00) === 0xbf00 && (nextHw & 0xf) !== 0) {
 						// Found CMP + IT pattern - this is standard FLAC behavior
-						return { type: 'standard' };
+						return {
+							type: 'standard',
+							isFlac: false,
+							colorFor4: 0,
+							colorForOther: 0,
+							movwAddr4: '',
+							movwInstr4: '',
+							movwAddrOther: '',
+							movwInstrOther: ''
+						};
 					}
 				}
 			}
@@ -276,7 +294,16 @@ export class ThemeDiscovery {
 			offset += is32bit ? 4 : 2;
 		}
 
-		return { type: 'unknown' };
+		return {
+			type: 'unknown',
+			isFlac: false,
+			colorFor4: 0,
+			colorForOther: 0,
+			movwAddr4: '',
+			movwInstr4: '',
+			movwAddrOther: '',
+			movwInstrOther: ''
+		};
 	}
 
 	/**

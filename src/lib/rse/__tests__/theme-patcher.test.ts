@@ -691,25 +691,18 @@ describe('Theme Patcher - Batch Firmware Testing', () => {
 	 * Test across all firmware versions to ensure compatibility
 	 */
 
-	// All available firmware versions from setup-fixtures.ts
+	// All available firmware versions - only versions >= V1.8.0 are supported
+	// Older versions (V1.2.5-V1.7.0) have different firmware structure and are not supported
 	const BASE_DIR = '/tmp/echo-mini-firmwares';
 	const firmwareFiles: FirmwareFile[] = [
-		{ version: 'V3.1.0', path: `${BASE_DIR}/ECHO MINI V3.1.0/HIFIEC80.IMG` },
-		{ version: 'V3.0.0', path: `${BASE_DIR}/ECHO MINI V3.0.0/HIFIEC80.IMG` },
-		{ version: 'V2.8.0', path: `${BASE_DIR}/ECHO MINI V2.8.0/HIFIEC80.IMG` },
-		{ version: 'V2.7.0', path: `${BASE_DIR}/ECHO MINI V2.7.0/HIFIEC80.IMG` },
-		{ version: 'V2.6.0', path: `${BASE_DIR}/ECHO MINI V2.6.0/HIFIEC80.IMG` },
-		{ version: 'V2.5.0', path: `${BASE_DIR}/ECHO MINI V2.5.0/HIFIEC80.IMG` },
-		{ version: 'V2.4.0', path: `${BASE_DIR}/ECHO MINI V2.4.0/HIFIEC80.IMG` },
-		{ version: 'V1.8.0', path: `${BASE_DIR}/ECHO MINI V1.8.0/HIFIEC80.IMG` },
-		{ version: 'V1.7.0', path: `${BASE_DIR}/ECHO MINI V1.7.0/HIFIEC80.IMG` },
-		{ version: 'V1.6.2', path: `${BASE_DIR}/ECHO MINI V1.6.2/HIFIEC80.IMG` },
-		{ version: 'V1.5.0', path: `${BASE_DIR}/ECHO MINI V1.5.0/HIFIEC80.IMG` },
-		{ version: 'V1.4.6', path: `${BASE_DIR}/ECHO MINI V1.4.6/HIFIEC80.IMG` },
-		{ version: 'V1.4.0', path: `${BASE_DIR}/ECHO MINI V1.4.0/HIFIEC80.IMG` },
-		{ version: 'V1.3.0', path: `${BASE_DIR}/ECHO MINI V1.3.0/HIFIEC80.IMG` },
-		{ version: 'V1.2.7', path: `${BASE_DIR}/ECHO MINI V1.2.7/HIFIEC80.IMG` },
-		{ version: 'V1.2.5', path: `${BASE_DIR}/ECHO MINI V1.2.5/HIFIEC80.IMG` }
+		{ version: 'V3.1.0', path: `${BASE_DIR}/ECHO MINI V3.1.0/ECHO MINI V3.1.0/HIFIEC10.IMG` },
+		{ version: 'V3.0.0', path: `${BASE_DIR}/ECHO MINI V3.0.0/ECHO MINI V3.0.0/HIFIEC00.IMG` },
+		{ version: 'V2.8.0', path: `${BASE_DIR}/ECHO MINI V2.8.0/ECHO MINI V2.8.0/HIFIEC80.IMG` },
+		{ version: 'V2.7.0', path: `${BASE_DIR}/ECHO MINI V2.7.0/ECHO MINI V2.7.0/HIFIEC70.IMG` },
+		{ version: 'V2.6.0', path: `${BASE_DIR}/ECHO MINI V2.6.0/ECHO MINI V2.6.0/HIFIEC60.IMG` },
+		{ version: 'V2.5.0', path: `${BASE_DIR}/ECHO MINI V2.5.0/ECHO MINI V2.5.0/HIFIEC50.IMG` },
+		{ version: 'V2.4.0', path: `${BASE_DIR}/ECHO MINI V2.4.0/ECHO MINI V2.4.0/HIFIEC40.IMG` },
+		{ version: 'V1.8.0', path: `${BASE_DIR}/ECHO MINI V1.8.0/ECHO MINI V1.8.0/HIFIEC80.IMG` }
 	];
 
 	// Skip batch tests if firmware files don't exist
@@ -719,37 +712,40 @@ describe('Theme Patcher - Batch Firmware Testing', () => {
 		firmwareFiles.forEach(({ version, path }) => {
 			const fileExists = fileIO.existsSync(path);
 
-			describe.skipIf(!fileExists, `Firmware ${version}`, () => {
-				it('should discover theme functions', () => {
-					const firmwareData = fileIO.readFileSync(path);
-					const flacResult = discoverFlacFunction(firmwareData);
-					const menuResult = discoverMenuFunction(firmwareData);
+			// Use describe with if condition instead of skipIf
+			if (fileExists) {
+				describe(`Firmware ${version}`, () => {
+					it('should discover theme functions', () => {
+						const firmwareData = fileIO.readFileSync(path);
+						const flacResult = discoverFlacFunction(firmwareData);
+						const menuResult = discoverMenuFunction(firmwareData);
 
-					expect(flacResult).not.toBeNull();
-					expect(menuResult).not.toBeNull();
+						expect(flacResult).not.toBeNull();
+						expect(menuResult).not.toBeNull();
+					});
+
+					it('should analyze firmware', () => {
+						const firmwareData = fileIO.readFileSync(path);
+						const patcher = new ThemePatcher(firmwareData);
+						const result = patcher.analyze();
+
+						expect(result.canPatch).toBe(true);
+						expect(result.themeFunctions.length).toBeGreaterThan(0);
+					});
+
+					it('should patch firmware', () => {
+						const firmwareData = fileIO.readFileSync(path);
+						const patcher = new ThemePatcher(firmwareData);
+
+						const flacColors = [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000];
+						const menuColors = Array(15).fill(0xf800);
+
+						const result = patcher.patch(flacColors, menuColors, `/tmp/${version}.patched.IMG`, true);
+
+						expect(result.success).toBe(true);
+					});
 				});
-
-				it('should analyze firmware', () => {
-					const firmwareData = fileIO.readFileSync(path);
-					const patcher = new ThemePatcher(firmwareData);
-					const result = patcher.analyze();
-
-					expect(result.canPatch).toBe(true);
-					expect(result.themeFunctions.length).toBeGreaterThan(0);
-				});
-
-				it('should patch firmware', () => {
-					const firmwareData = fileIO.readFileSync(path);
-					const patcher = new ThemePatcher(firmwareData);
-
-					const flacColors = [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000];
-					const menuColors = Array(15).fill(0xf800);
-
-					const result = patcher.patch(flacColors, menuColors, `/tmp/${version}.patched.IMG`, true);
-
-					expect(result.success).toBe(true);
-				});
-			});
+			}
 		});
 	});
 });

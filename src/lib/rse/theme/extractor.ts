@@ -49,7 +49,16 @@ export class ThemeColorExtractor {
 					version: 'Unknown',
 					themeFunctions: [],
 					colors: createColorMap(),
-					flacBehavior: { type: 'unknown' },
+					flacBehavior: {
+						type: 'unknown',
+						isFlac: false,
+						colorFor4: 0,
+						colorForOther: 0,
+						movwAddr4: '',
+						movwInstr4: '',
+						movwAddrOther: '',
+						movwInstrOther: ''
+					},
 					canPatch: false
 				};
 			}
