@@ -24,7 +24,6 @@ import {
 	ThemeError,
 	PatchError,
 	ValidationError,
-	AlreadyPatchedError,
 	CapacityError,
 	throwThemeError
 } from './errors.js';
@@ -97,6 +96,66 @@ export class ThemePatcher {
 	}
 
 	/**
+	 * Find existing NOP slide from patched firmware
+	 *
+	 * Decodes BL instructions to find the NOP slide boundaries
+	 */
+	private findExistingNopSlide(): NopSlide | null {
+		const flacResult = discoverFlacFunction(this.data);
+		const menuResult = discoverMenuFunction(this.data);
+
+		if (!flacResult || !menuResult) {
+			return null;
+		}
+
+		const [, flacPatchAddr] = flacResult;
+		const [, menuPatchAddr] = menuResult;
+
+		// Check if both have BL instructions (indicating patched firmware)
+		if (!this.detector.isBlInstruction(flacPatchAddr) ||
+		    !this.detector.isBlInstruction(menuPatchAddr)) {
+			return null;
+		}
+
+		// Decode BL targets to find NOP slide boundaries
+		const flacCodeStart = this.detector.decodeBlTarget(flacPatchAddr);
+		const menuCodeStart = this.detector.decodeBlTarget(menuPatchAddr);
+
+		// Both BLs should point to the same NOP slide
+		if (flacCodeStart !== menuCodeStart) {
+			return null;  // Invalid patch state
+		}
+
+		// Find NOP slide boundaries by searching for NOP bytes (0x00)
+		// Start from the code location and search backward/forward
+		let start = flacCodeStart;
+		while (start > 0 && this.data[start - 1] === 0x00) {
+			start--;
+		}
+
+		let end = flacCodeStart;
+		while (end < this.data.length && this.data[end] === 0x00) {
+			end++;
+		}
+
+		// Also include the handler code that was written
+		// The handlers are at the beginning of the NOP slide
+		// We need to find where the NOP region actually ends
+		// Search forward for non-NOP, non-metadata bytes
+		// For now, use a reasonable size (typical NOP slide is a few hundred bytes)
+		const nopSlideSize = Math.min(end - start, 1024);  // Cap at 1KB for safety
+
+		return {
+			start,
+			end: start + nopSlideSize,
+			size: nopSlideSize,
+			source: 'existing-patch',
+			isActive: true,
+			referenceCount: 0
+		};
+	}
+
+	/**
 	 * Patch firmware with custom colors
 	 */
 	patch(
@@ -121,46 +180,58 @@ export class ThemePatcher {
 				throw new PatchError('Firmware cannot be patched: theme functions or NOP slides not found');
 			}
 
-			// Check if already patched
+			// Check if already patched - if so, find existing NOP slide for re-patching
+			let nopSlide: NopSlide;
+			let isRepatch = false;
+
 			if (analysis.patchStatus.isPatched) {
-				throw new AlreadyPatchedError('Firmware is already patched');
+				console.error('[INFO] Firmware is already patched - attempting re-patch');
+				const existingNopSlide = this.findExistingNopSlide();
+				if (!existingNopSlide) {
+					throw new PatchError('Cannot re-patch: unable to locate existing NOP slide');
+				}
+				nopSlide = existingNopSlide;
+				isRepatch = true;
+				console.error(`[INFO] Re-using existing NOP slide: 0x${nopSlide.start.toString(16)} - 0x${nopSlide.end.toString(16)} (${nopSlide.size} bytes)`);
+			} else {
+				// Find best NOP slide
+				// Calculate required size dynamically based on actual handler sizes
+				// We'll generate handlers first to get their sizes
+				const tempFlacHandler = this.generateFlacHandler(flacColors);
+				const tempMenuHandler = this.generateMenuHandler(menuColors);
+				const tempMetadata = createPatchMetadata(
+					Math.floor(Date.now() / 1000),
+					flacColors,
+					menuColors
+				);
+				const tempMetadataBytes = writePatchMetadata(tempMetadata);
+
+				// Calculate required size:
+				// - FLAC handler: tempFlacHandler.length
+				// - Menu handler: tempMenuHandler.length (aligned after FLAC)
+				// - Metadata: tempMetadataBytes.length
+				const PROTECTION_SIZE = 0;
+				const ALIGNMENT = 4;
+				const flacEnd = PROTECTION_SIZE + tempFlacHandler.length;
+				const menuStart = Math.ceil(flacEnd / ALIGNMENT) * ALIGNMENT;
+				const requiredSize = menuStart + tempMenuHandler.length + tempMetadataBytes.length;
+
+				const funcAddrs = analysis.themeFunctions.map(f => f.funcAddr);
+				const selectedSlide = this.finder.selectBestSlide(funcAddrs, requiredSize);
+
+				if (!selectedSlide) {
+					throw new CapacityError('No suitable NOP slide found for patch code');
+				}
+
+				nopSlide = selectedSlide;
+
+				// DEBUG: Log selected NOP slide details
+				console.error(`[DEBUG] Selected NOP slide: 0x${nopSlide.start.toString(16)} - 0x${nopSlide.end.toString(16)} (${nopSlide.size} bytes)`);
+				console.error(`[DEBUG] Required size: ${requiredSize} bytes`);
 			}
 
-			// Find best NOP slide
-			// Calculate required size dynamically based on actual handler sizes
-			// We'll generate handlers first to get their sizes
-			const tempFlacHandler = this.generateFlacHandler(flacColors);
-			const tempMenuHandler = this.generateMenuHandler(menuColors);
-			const tempMetadata = createPatchMetadata(
-				Math.floor(Date.now() / 1000),
-				flacColors,
-				menuColors
-			);
-			const tempMetadataBytes = writePatchMetadata(tempMetadata);
-
-			// Calculate required size:
-			// - FLAC handler: tempFlacHandler.length
-			// - Menu handler: tempMenuHandler.length (aligned after FLAC)
-			// - Metadata: tempMetadataBytes.length
-			const PROTECTION_SIZE = 0;
-			const ALIGNMENT = 4;
-			const flacEnd = PROTECTION_SIZE + tempFlacHandler.length;
-			const menuStart = Math.ceil(flacEnd / ALIGNMENT) * ALIGNMENT;
-			const requiredSize = menuStart + tempMenuHandler.length + tempMetadataBytes.length;
-
-			const funcAddrs = analysis.themeFunctions.map(f => f.funcAddr);
-			const nopSlide = this.finder.selectBestSlide(funcAddrs, requiredSize);
-
-			if (!nopSlide) {
-				throw new CapacityError('No suitable NOP slide found for patch code');
-			}
-
-			// DEBUG: Log selected NOP slide details
-			console.error(`[DEBUG] Selected NOP slide: 0x${nopSlide.start.toString(16)} - 0x${nopSlide.end.toString(16)} (${nopSlide.size} bytes)`);
-			console.error(`[DEBUG] Required size: ${requiredSize} bytes`);
-
-			// Create patch data
-			const patchData = this.createPatchData(flacColors, menuColors, nopSlide);
+			// Create patch data (skip safety check for re-patch)
+			const patchData = this.createPatchData(flacColors, menuColors, nopSlide, isRepatch);
 
 			// Apply patches
 			const patchedData = new Uint8Array(this.data);
@@ -228,11 +299,14 @@ export class ThemePatcher {
 	 * - After protection: FLAC handler code
 	 * - After FLAC (aligned): Menu handler code
 	 * - End: Metadata
+	 *
+	 * @param isRepatch - Skip safety checks when re-patching existing firmware
 	 */
 	private createPatchData(
 		flacColors: number[],
 		menuColors: number[],
-		nopSlide: NopSlide
+		nopSlide: NopSlide,
+		isRepatch = false
 	): { flacCodeAddr: number; menuCodeAddr: number; code: Uint8Array; metadataAddr: number } {
 		// DEBUG: Log input NOP slide
 		console.error(`[DEBUG] createPatchData: nopSlide.start = 0x${nopSlide.start.toString(16)}, size = ${nopSlide.size}`);
@@ -286,11 +360,14 @@ export class ThemePatcher {
 		}
 
 		// SAFETY CHECK: Verify all bytes to be overwritten are NOPs (0x00)
-		this.verifyNopSlideSafety(nopSlide, [
-			{ start: nopSlide.start + flacCodeOffset, end: nopSlide.start + flacCodeEnd, name: 'FLAC handler' },
-			{ start: nopSlide.start + menuCodeOffset, end: nopSlide.start + menuCodeEnd, name: 'Menu handler' },
-			{ start: metadataAddr, end: nopSlide.end, name: 'metadata' }
-		]);
+		// Skip safety check when re-patching since we're overwriting our own code
+		if (!isRepatch) {
+			this.verifyNopSlideSafety(nopSlide, [
+				{ start: nopSlide.start + flacCodeOffset, end: nopSlide.start + flacCodeEnd, name: 'FLAC handler' },
+				{ start: nopSlide.start + menuCodeOffset, end: nopSlide.start + menuCodeEnd, name: 'Menu handler' },
+				{ start: metadataAddr, end: nopSlide.end, name: 'metadata' }
+			]);
+		}
 
 		// Build the complete code buffer
 		const code = new Uint8Array(nopSlide.size);

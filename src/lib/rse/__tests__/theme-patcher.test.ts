@@ -459,6 +459,70 @@ describe('Theme Patcher - Round-trip Color Extraction', () => {
 	});
 });
 
+describe('Theme Patcher - Re-patching', () => {
+	/**
+	 * Test that we can re-patch an already-patched firmware
+	 * This should reuse the same NOP slide instead of finding a new one
+	 */
+
+	it('should allow re-patching with different colors', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+
+		// First patch with original colors
+		const originalFlacColors = [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000];
+		const originalMenuColors = Array(15).fill(0xf800);
+
+		const patcher = new ThemePatcher(firmwareData);
+		const firstResult = patcher.patch(
+			originalFlacColors,
+			originalMenuColors,
+			'/tmp/test_repatch_first.IMG',
+			true
+		);
+
+		expect(firstResult.success).toBe(true);
+
+		// Load the patched firmware and patch again with new colors
+		const newFlacColors = [0x44DE, 0x44DE, 0x44DE, 0x44DE, 0xE162];
+		const newMenuColors = [
+			0x77DE, 0x2945, 0x0000,  // T0
+			0xFFFF, 0x2945, 0xFFFF,  // T1
+			0x77DE, 0x0000, 0x2945,  // T2
+			0xFFFF, 0x0000, 0x0000,  // T3
+			0xFFFF, 0x0000, 0x0000,  // T4
+		];
+
+		const patchedFirmware = fileIO.readFileSync('/tmp/test_repatch_first.IMG');
+		const repatcher = new ThemePatcher(patchedFirmware);
+
+		const secondResult = repatcher.patch(
+			newFlacColors,
+			newMenuColors,
+			'/tmp/test_repatch_second.IMG',
+			true
+		);
+
+		expect(secondResult.success).toBe(true);
+
+		// Verify NOP slide is reused (same start address)
+		expect(secondResult.nopSlide.start).toEqual(firstResult.nopSlide.start);
+
+		// Read back and verify new metadata
+		const twicePatchedFirmware = fileIO.readFileSync('/tmp/test_repatch_second.IMG');
+		const detector = new PatchDetector(twicePatchedFirmware, 'Unknown');
+
+		if (secondResult.nopSlide) {
+			const metadata = detector.readPatchMetadata(secondResult.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				// Verify new colors are stored
+				expect(metadata.flacColors).toEqual(newFlacColors);
+				expect(metadata.menuColors).toEqual(newMenuColors);
+			}
+		}
+	});
+});
+
 describe('Theme Patcher - Batch Firmware Testing', () => {
 	/**
 	 * Test across all firmware versions to ensure compatibility
