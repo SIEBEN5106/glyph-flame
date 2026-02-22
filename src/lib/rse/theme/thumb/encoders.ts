@@ -5,8 +5,6 @@
  * Ported from theme_patcher.py encode functions.
  */
 
-import { InstructionType } from './instructions.js';
-
 /**
  * Custom error for Thumb instruction encoding errors
  */
@@ -52,8 +50,8 @@ export function encodeBl(fromAddr: number, toAddr: number): Uint8Array {
 	// Extract components from 25-bit value
 	// imm10 = bits [21:12] (10 bits) - shift right by 12 to get bits [21:12]
 	const imm10 = (imm25 >> 12) & 0x3ff;
-	// imm11 = bits [10:0] (11 bits)
-	const imm11 = imm25 & 0x7ff;
+	// imm11 = bits [11:1] (11 bits) - shift right by 1 to get bits [11:1]
+	const imm11 = (imm25 >> 1) & 0x7ff;
 	// I1, I2 = sign extension bits [23:22]
 	const I1 = (imm25 >> 23) & 1;
 	const I2 = (imm25 >> 22) & 1;
@@ -256,7 +254,6 @@ export function encodeStrh(rt: number, rn: number, offset: number): Uint8Array {
 
 	// Check if we can use 5-bit immediate encoding (offset / 2)
 	if (offset <= 62 && rn <= 7) {
-		const imm5 = (offset / 2) & 0x1f;
 		const opcode = 0x8000 | ((offset / 2) << 6) | (rn << 3) | rt;
 		return new Uint8Array([opcode & 0xff, (opcode >> 8) & 0xff]);
 	}
@@ -342,12 +339,15 @@ export function decodeBlTarget(fromAddr: number, blBytes: Uint8Array): number {
 	const I2 = (~(J2 ^ S)) & 1;
 
 	// Reconstruct offset
-	// Note: imm10 was encoded by shifting imm25 >> 12, so we shift back by 12
-	const imm25 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | imm11;
+	// imm10 is bits [21:12] and imm11 is bits [11:1], so we shift imm11 left by 1
+	const imm25 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | (imm11 << 1);
 
 	let imm32 = imm25 << 1;
+
 	if (S) {
 		// Sign extend for negative offsets
+		// After << 1, sign bit is at position 25 (26-bit value)
+		// Need to extend to 32 bits by copying bit 25 to bits 26-31
 		imm32 |= 0xfe000000;
 	}
 	// For positive offsets (S=0), the upper bits are already 0

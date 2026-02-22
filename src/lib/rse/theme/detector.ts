@@ -49,6 +49,7 @@ export class PatchDetector {
 	isBlInstruction(addr: number): boolean {
 		if (addr + 4 > this.data.length) return false;
 
+		// Little-endian: bytes [0] and [1] form hw1, bytes [2] and [3] form hw2
 		const hw1 = this.data[addr] | (this.data[addr + 1] << 8);
 		const hw2 = this.data[addr + 2] | (this.data[addr + 3] << 8);
 
@@ -61,6 +62,7 @@ export class PatchDetector {
 	decodeBlTarget(addr: number): number {
 		if (addr + 4 > this.data.length) return 0;
 
+		// Little-endian: bytes [0] and [1] form hw1, bytes [2] and [3] form hw2
 		const hw1 = this.data[addr] | (this.data[addr + 1] << 8);
 		const hw2 = this.data[addr + 2] | (this.data[addr + 3] << 8);
 
@@ -70,16 +72,18 @@ export class PatchDetector {
 		const J2 = (hw2 >> 11) & 1;
 		const imm11 = hw2 & 0x7ff;
 
-		const I1 = ~(J1 ^ S) & 1;
-		const I2 = ~(J2 ^ S) & 1;
+		// I1 = NOT(J1 XOR S), I2 = NOT(J2 XOR S)
+		const I1 = (~(J1 ^ S)) & 1;
+		const I2 = (~(J2 ^ S)) & 1;
 
-		// imm10 is at bits [21:12], so shift by 12
-		let imm32 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | imm11;
-		if (S) {
-			imm32 = imm32 | 0xfe000000;
-		}
+		// Reconstruct 25-bit offset and convert to byte offset
+		// imm10 is bits [21:12] and imm11 is bits [11:1], so shift imm11 left by 1
+		let imm32 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | (imm11 << 1);
 
-		// Convert to signed 32-bit
+		// Shift left by 1 to get byte offset (bit 0 of imm25 is always 0)
+		imm32 = imm32 << 1;
+
+		// Sign extension for negative offsets
 		if (imm32 & 0x80000000) {
 			imm32 = imm32 - 0x100000000;
 		}

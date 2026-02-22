@@ -530,7 +530,7 @@ def encode_bl(from_addr: int, to_addr: int) -> bytes:
     I1 = (imm25 >> 23) & 1
     I2 = (imm25 >> 22) & 1
     imm10 = (imm25 >> 12) & 0x3FF
-    imm11 = imm25 & 0x7FF  # Fixed: was 0xFFF (12 bits), now 0x7FF (11 bits)
+    imm11 = (imm25 >> 1) & 0x7FF  # bits [11:1] of the 25-bit value
 
     # J1 = NOT(S XOR I1), J2 = NOT(S XOR I2)
     J1 = (~(S ^ I1)) & 1

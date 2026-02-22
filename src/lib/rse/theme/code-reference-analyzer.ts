@@ -291,11 +291,8 @@ export class CodeReferenceAnalyzer {
 
 		let imm32 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | (imm11 << 1);
 		if (S) {
-			imm32 |= 0xFE000000; // Sign extend
+			imm32 |= 0xFE000000; // Sign extend from bit 25
 		}
-
-		// Sign extend to 32 bits
-		imm32 = imm32 | (imm32 & 0x10000000 ? 0xFE000000 : 0);
 
 		return (addr + 4 + imm32) & 0xFFFFFFFF;
 	}

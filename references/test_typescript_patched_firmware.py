@@ -90,7 +90,7 @@ def find_nop_slide_code(firmware: bytes, flac_patch_addr: int):
 def discover_menu_function(firmware: bytes):
 	"""Discover Menu patch point - known address for ECHO MINI V3.1.0"""
 	# Known Menu patch address for ECHO MINI V3.1.0
-	menu_patch_addr = 0x3F872
+	menu_patch_addr = 0x3F870
 
 	# Verify this is a BL instruction in the patched firmware
 	if menu_patch_addr + 4 < len(firmware):

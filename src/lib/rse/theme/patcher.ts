@@ -53,8 +53,8 @@ export class ThemePatcher {
 	 * Analyze firmware for patching
 	 */
 	analyze(): PatchAnalysisResult {
-		const flacResult = discoverFlacFunction(this.data);
-		const menuResult = discoverMenuFunction(this.data);
+		const flacResult = discoverFlacFunction(this.data, this.version);
+		const menuResult = discoverMenuFunction(this.data, this.version);
 
 		const themeFunctions: PatchPointInfo[] = [];
 
@@ -101,8 +101,8 @@ export class ThemePatcher {
 	 * Decodes BL instructions to find the NOP slide boundaries
 	 */
 	private findExistingNopSlide(): NopSlide | null {
-		const flacResult = discoverFlacFunction(this.data);
-		const menuResult = discoverMenuFunction(this.data);
+		const flacResult = discoverFlacFunction(this.data, this.version);
+		const menuResult = discoverMenuFunction(this.data, this.version);
 
 		if (!flacResult || !menuResult) {
 			return null;
@@ -112,8 +112,10 @@ export class ThemePatcher {
 		const [, menuPatchAddr] = menuResult;
 
 		// Check if both have BL instructions (indicating patched firmware)
-		if (!this.detector.isBlInstruction(flacPatchAddr) ||
-		    !this.detector.isBlInstruction(menuPatchAddr)) {
+		const flacIsBl = this.detector.isBlInstruction(flacPatchAddr);
+		const menuIsBl = this.detector.isBlInstruction(menuPatchAddr);
+
+		if (!flacIsBl || !menuIsBl) {
 			return null;
 		}
 
@@ -121,28 +123,32 @@ export class ThemePatcher {
 		const flacCodeStart = this.detector.decodeBlTarget(flacPatchAddr);
 		const menuCodeStart = this.detector.decodeBlTarget(menuPatchAddr);
 
-		// Both BLs should point to the same NOP slide
-		if (flacCodeStart !== menuCodeStart) {
-			return null;  // Invalid patch state
+		// Both BLs should point to handlers within the same NOP slide
+		// The targets don't have to be identical - they're different handlers at different offsets
+		// Check if they're within a reasonable range (e.g., 1KB) of each other
+		const MAX_NOP_SLIDE_SIZE = 1024;
+
+		if (Math.abs(flacCodeStart - menuCodeStart) > MAX_NOP_SLIDE_SIZE) {
+			return null;  // Invalid patch state - targets should be in same NOP slide
 		}
 
+		// Use the FLAC code start as the NOP slide start (it's at the beginning)
 		// Find NOP slide boundaries by searching for NOP bytes (0x00)
-		// Start from the code location and search backward/forward
+		// Start from the code location and search backward to find the start
 		let start = flacCodeStart;
 		while (start > 0 && this.data[start - 1] === 0x00) {
 			start--;
 		}
 
-		let end = flacCodeStart;
+		// For the end, we can't search forward from flacCodeStart because the handler
+		// code has overwritten the NOP bytes. Instead, search forward from a location
+		// well beyond the handler code (handlers are typically < 512 bytes)
+		let end = flacCodeStart + 512;
 		while (end < this.data.length && this.data[end] === 0x00) {
 			end++;
 		}
 
-		// Also include the handler code that was written
-		// The handlers are at the beginning of the NOP slide
-		// We need to find where the NOP region actually ends
-		// Search forward for non-NOP, non-metadata bytes
-		// For now, use a reasonable size (typical NOP slide is a few hundred bytes)
+		// Cap at a reasonable size (typical NOP slide is a few hundred bytes)
 		const nopSlideSize = Math.min(end - start, 1024);  // Cap at 1KB for safety
 
 		return {
@@ -507,7 +513,10 @@ export class ThemePatcher {
 		nopSlide: NopSlide,
 		patchData: { flacCodeAddr: number; menuCodeAddr: number; code: Uint8Array }
 	): void {
+		console.error(`[DEBUG] writePatchCode: writing ${patchData.code.length} bytes to 0x${nopSlide.start.toString(16)}`);
+		console.error(`[DEBUG] writePatchCode: first 8 bytes = ${Array.from(patchData.code.slice(0, 8)).map(b => '0x' + b.toString(16)).join(' ')}`);
 		data.set(patchData.code, nopSlide.start);
+		console.error(`[DEBUG] writePatchCode: done. First 8 bytes in data = ${Array.from(data.slice(nopSlide.start, nopSlide.start + 8)).map(b => '0x' + b.toString(16)).join(' ')}`);
 	}
 
 	/**

@@ -423,17 +423,90 @@ export class ThemeDiscovery {
 }
 
 /**
- * Discover FLAC function using default parameters
+ * Known patch addresses for specific firmware versions
+ * These are the addresses where patches are applied in patched firmware
  */
-export function discoverFlacFunction(data: Uint8Array): [number, number] | null {
-	return ThemeDiscovery.detectFlacFunction(data);
+interface KnownPatchAddress {
+	readonly version: string;
+	readonly flacPatchAddr: number;
+	readonly menuPatchAddr: number;
+}
+
+const KNOWN_PATCH_ADDRESSES: KnownPatchAddress[] = [
+	// ECHO MINI V3.1.0
+	{
+		version: 'V3.1.0',
+		flacPatchAddr: 0x86CB0,
+		menuPatchAddr: 0x3F870
+	}
+];
+
+/**
+ * Check if data at address is a BL instruction
+ */
+function isBlInstruction(data: Uint8Array, addr: number): boolean {
+	if (addr + 4 > data.length) return false;
+	const hw1 = data[addr] | (data[addr + 1] << 8);
+	const hw2 = data[addr + 2] | (data[addr + 3] << 8);
+	return (hw1 & 0xf800) === 0xf000 && (hw2 & 0xd000) === 0xd000;
+}
+
+/**
+ * Discover FLAC function using default parameters
+ *
+ * For patched firmware, checks known patch addresses for BL instructions FIRST.
+ * For unpatched firmware, falls back to searching for CMP+ITE pattern.
+ */
+export function discoverFlacFunction(data: Uint8Array, version?: string): [number, number] | null {
+	// First, check known patch addresses for BL instructions (for patched firmware)
+	// If version is 'Unknown' or not specified, check all known addresses
+	const shouldCheckAll = !version || version === 'Unknown';
+
+	for (const known of KNOWN_PATCH_ADDRESSES) {
+		if (shouldCheckAll || known.version === version) {
+			const addr = known.flacPatchAddr;
+			if (addr + 4 <= data.length && isBlInstruction(data, addr)) {
+				return [addr, addr];
+			}
+		}
+	}
+
+	// Fall back to the standard CMP+ITE pattern search (for unpatched firmware)
+	const result = ThemeDiscovery.detectFlacFunction(data);
+	if (result) {
+		return result;
+	}
+
+	return null;
 }
 
 /**
  * Discover Menu function using default parameters
+ *
+ * For patched firmware, checks known patch addresses for BL instructions FIRST.
+ * For unpatched firmware, falls back to searching for MOV.W pattern.
  */
-export function discoverMenuFunction(data: Uint8Array): [number, number] | null {
-	return ThemeDiscovery.detectMenuFunction(data);
+export function discoverMenuFunction(data: Uint8Array, version?: string): [number, number] | null {
+	// First, check known patch addresses for BL instructions (for patched firmware)
+	// If version is 'Unknown' or not specified, check all known addresses
+	const shouldCheckAll = !version || version === 'Unknown';
+
+	for (const known of KNOWN_PATCH_ADDRESSES) {
+		if (shouldCheckAll || known.version === version) {
+			const addr = known.menuPatchAddr;
+			if (addr + 4 <= data.length && isBlInstruction(data, addr)) {
+				return [addr, addr];
+			}
+		}
+	}
+
+	// Fall back to the standard MOV.W pattern search (for unpatched firmware)
+	const result = ThemeDiscovery.detectMenuFunction(data);
+	if (result) {
+		return result;
+	}
+
+	return null;
 }
 
 /**
