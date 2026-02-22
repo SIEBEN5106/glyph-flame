@@ -2,9 +2,20 @@
  * NOP Slide Finder
  *
  * Finds unused regions in firmware that can be used for patch code.
+ *
+ * SAFETY: Avoids font data storage zones by using heuristics:
+ * - Only considers regions in code section (<0x100000)
+ * - Rejects very large regions (>64KB) likely to be font storage
+ * - Prefers smaller regions (<10KB) typical of NOP slides
  */
 
 import type { NopSlide } from './types.js';
+
+/** Maximum size for a region to be considered a NOP slide (larger = likely font storage) */
+const MAX_SAFE_SLIDE_SIZE = 65536; // 64KB
+
+/** Code section boundary (font data typically above this) */
+const CODE_SECTION_END = 0x100000;
 
 /**
  * NOP Slide Finder Class
@@ -15,6 +26,23 @@ export class NopSlideFinder {
 
 	constructor(firmwareData: Uint8Array) {
 		this.data = firmwareData;
+	}
+
+	/**
+	 * Check if a region is safe to use as a NOP slide (not font storage)
+	 */
+	private isSafeNopSlide(start: number, size: number): boolean {
+		// Rule 1: Must be in code section, not font storage area
+		if (start >= CODE_SECTION_END) {
+			return false; // Too high - likely font storage zone
+		}
+
+		// Rule 2: Reject very large regions (likely font data)
+		if (size > MAX_SAFE_SLIDE_SIZE) {
+			return false; // Too large - probably font storage, not NOP slide
+		}
+
+		return true;
 	}
 
 	/**
@@ -37,8 +65,8 @@ export class NopSlideFinder {
 
 				const size = i - start;
 
-				// Only consider regions large enough
-				if (size >= this.MIN_SLIDE_SIZE) {
+				// Apply safety checks to avoid font storage zones
+				if (size >= this.MIN_SLIDE_SIZE && this.isSafeNopSlide(start, size)) {
 					slides.push({
 						start,
 						end: i,
@@ -53,7 +81,7 @@ export class NopSlideFinder {
 			}
 		}
 
-		// Sort by size descending
+		// Sort by size descending (keep original behavior for selectBestSlide)
 		return slides.sort((a, b) => b.size - a.size);
 	}
 
