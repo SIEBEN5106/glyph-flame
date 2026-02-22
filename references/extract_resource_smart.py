@@ -5,6 +5,33 @@ Smart Bitmap Resource Extractor with Bootloader Field Reorganization Handling
 This script extracts bitmap images from firmware files by correctly handling
 the Bootloader's runtime metadata field reorganization pattern.
 
+SETUP INSTRUCTIONS:
+===================
+Before running this script, you need to download firmware files:
+
+  1. Run: bun run src/lib/rse/__tests__/setup-fixtures.ts
+     This downloads firmwares to /tmp/echo-mini-firmwares and creates
+     references/firmwares symlink for this script.
+
+  2. Then run: python3 references/extract_resource_smart.py
+
+USAGE:
+======
+  python3 extract_resource_smart.py [firmware_directory]
+
+  Arguments:
+    firmware_directory: Optional path to firmware directory.
+                       Defaults to 'references/firmwares'
+
+  Examples:
+    python3 extract_resource_smart.py                    # Use default path
+    python3 extract_resource_smart.py /tmp/echo-mini-firmwares
+    python3 extract_resource_smart.py /custom/path
+
+OUTPUT:
+=======
+Extracted bitmaps are saved to: extracted_bitmaps_smart/batch_YYYYMMDD_HHMMSS/
+
 KEY INSIGHT FROM FIRMWARE ANALYSIS (2026-02-07):
 ================================================
 Entry 0 is NOT "corrupted" - the firmware works correctly!
@@ -604,10 +631,38 @@ def main():
 
     Scans for firmware files and extracts bitmaps from each using
     intelligent misalignment detection.
+
+    Usage:
+        python3 extract_resource_smart.py [firmware_directory]
+
+    Arguments:
+        firmware_directory: Optional path to firmware directory.
+                           Defaults to 'references/firmwares' which is
+                           populated by bun run src/lib/rse/__tests__/setup-fixtures.ts
+
+    Examples:
+        python3 extract_resource_smart.py
+        python3 extract_resource_smart.py /tmp/echo-mini-firmwares
+        python3 extract_resource_smart.py /custom/path/to/firmwares
     """
     import sys
 
-    firmware_dir = Path("/home/losses/Downloads/ECHO MINI V3.1.0/firmwares")
+    # Determine firmware directory from command line or default
+    if len(sys.argv) > 1 and not sys.argv[1].startswith('-'):
+        firmware_dir = Path(sys.argv[1])
+    else:
+        # Default to references/firmwares (populated by setup-fixtures.ts)
+        script_dir = Path(__file__).parent
+        firmware_dir = script_dir / "firmwares"
+
+    if not firmware_dir.exists():
+        print(f"Error: Firmware directory not found: {firmware_dir}")
+        print("\nPlease run the setup script first:")
+        print("  bun run src/lib/rse/__tests__/setup-fixtures.ts")
+        print("\nOr specify the firmware directory:")
+        print("  python3 extract_resource_smart.py /path/to/firmwares")
+        sys.exit(1)
+
     img_files = sorted(firmware_dir.glob("**/*.IMG"))
 
     if not img_files:
