@@ -46,15 +46,15 @@ export function encodeBl(fromAddr: number, toAddr: number): Uint8Array {
 	// Get 25-bit signed value (offset >> 1 because Thumb is 16-bit aligned)
 	const imm25 = (offset >> 1) & 0x1ffffff;
 
-	// Sign bit
-	const S = offset < 0 ? 1 : 0;
+	// Sign bit (bit 24 of the 25-bit value)
+	const S = (imm25 >> 24) & 1;
 
 	// Extract components from 25-bit value
-	// imm10 = bits [21:12] (10 bits)
+	// imm10 = bits [21:12] (10 bits) - shift right by 12 to get bits [21:12]
 	const imm10 = (imm25 >> 12) & 0x3ff;
 	// imm11 = bits [10:0] (11 bits)
 	const imm11 = imm25 & 0x7ff;
-	// I1 = bit 23, I2 = bit 22
+	// I1, I2 = sign extension bits [23:22]
 	const I1 = (imm25 >> 23) & 1;
 	const I2 = (imm25 >> 22) & 1;
 
@@ -342,7 +342,7 @@ export function decodeBlTarget(fromAddr: number, blBytes: Uint8Array): number {
 	const I2 = (~(J2 ^ S)) & 1;
 
 	// Reconstruct offset
-	// Note: imm10 was encoded at bits [21:12] of imm25, so shift back by 12
+	// Note: imm10 was encoded by shifting imm25 >> 12, so we shift back by 12
 	const imm25 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | imm11;
 
 	let imm32 = imm25 << 1;

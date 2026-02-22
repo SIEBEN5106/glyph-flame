@@ -127,15 +127,37 @@ export class ThemePatcher {
 			}
 
 			// Find best NOP slide
-			// Need: FLAC (32 + 44) + Menu (128 + 124) + Metadata (51) = 379 bytes minimum
-			// But we can overlap: max(32 + 44, 128 + 124) + 51 = 252 + 51 = 303 bytes
+			// Calculate required size dynamically based on actual handler sizes
+			// We'll generate handlers first to get their sizes
+			const tempFlacHandler = this.generateFlacHandler(flacColors);
+			const tempMenuHandler = this.generateMenuHandler(menuColors);
+			const tempMetadata = createPatchMetadata(
+				Math.floor(Date.now() / 1000),
+				flacColors,
+				menuColors
+			);
+			const tempMetadataBytes = writePatchMetadata(tempMetadata);
+
+			// Calculate required size:
+			// - FLAC handler: tempFlacHandler.length
+			// - Menu handler: tempMenuHandler.length (aligned after FLAC)
+			// - Metadata: tempMetadataBytes.length
+			const PROTECTION_SIZE = 0;
+			const ALIGNMENT = 4;
+			const flacEnd = PROTECTION_SIZE + tempFlacHandler.length;
+			const menuStart = Math.ceil(flacEnd / ALIGNMENT) * ALIGNMENT;
+			const requiredSize = menuStart + tempMenuHandler.length + tempMetadataBytes.length;
+
 			const funcAddrs = analysis.themeFunctions.map(f => f.funcAddr);
-			const requiredSize = 303; // Minimum size needed
 			const nopSlide = this.finder.selectBestSlide(funcAddrs, requiredSize);
 
 			if (!nopSlide) {
 				throw new CapacityError('No suitable NOP slide found for patch code');
 			}
+
+			// DEBUG: Log selected NOP slide details
+			console.error(`[DEBUG] Selected NOP slide: 0x${nopSlide.start.toString(16)} - 0x${nopSlide.end.toString(16)} (${nopSlide.size} bytes)`);
+			console.error(`[DEBUG] Required size: ${requiredSize} bytes`);
 
 			// Create patch data
 			const patchData = this.createPatchData(flacColors, menuColors, nopSlide);
@@ -173,15 +195,14 @@ export class ThemePatcher {
 			// Write patch code to NOP slide
 			this.writePatchCode(patchedData, nopSlide, patchData);
 
-			// Write metadata
+			// Write metadata (using dynamic address from createPatchData)
 			const metadata = createPatchMetadata(
 				Math.floor(Date.now() / 1000),
 				flacColors,
 				menuColors
 			);
 			const metadataBytes = writePatchMetadata(metadata);
-			const metadataAddr = nopSlide.end - 51;
-			patchedData.set(metadataBytes, metadataAddr);
+			patchedData.set(metadataBytes, patchData.metadataAddr);
 
 			// Write to file if requested
 			if (writeFile) {
@@ -191,7 +212,7 @@ export class ThemePatcher {
 			return {
 				success: true,
 				nopSlide,
-				metadataAddr,
+				metadataAddr: patchData.metadataAddr,
 				patchPoints
 			};
 		} catch (error) {
@@ -202,48 +223,123 @@ export class ThemePatcher {
 	/**
 	 * Create patch data structure
 	 *
-	 * Layout matches Python theme_patcher.py:
-	 * - Offset 0-31: Reserved for protection instruction (32 bytes)
-	 * - Offset 32: FLAC handler code
-	 * - Offset 128: Menu handler code
-	 * - End-51: Metadata
+	 * Layout is dynamically calculated:
+	 * - Start: Protection/reserved area (configurable, default 32 bytes for B instruction)
+	 * - After protection: FLAC handler code
+	 * - After FLAC (aligned): Menu handler code
+	 * - End: Metadata
 	 */
 	private createPatchData(
 		flacColors: number[],
 		menuColors: number[],
 		nopSlide: NopSlide
-	): { flacCodeAddr: number; menuCodeAddr: number; code: Uint8Array } {
-		// Reserve space for metadata at the end of NOP slide (51 bytes)
-		const METADATA_SIZE = 51;
-		const PROTECTION_SIZE = 32;
+	): { flacCodeAddr: number; menuCodeAddr: number; code: Uint8Array; metadataAddr: number } {
+		// DEBUG: Log input NOP slide
+		console.error(`[DEBUG] createPatchData: nopSlide.start = 0x${nopSlide.start.toString(16)}, size = ${nopSlide.size}`);
 
-		// Match Python offsets exactly
-		const flacCodeAddr = nopSlide.start + PROTECTION_SIZE;
-		const menuCodeAddr = nopSlide.start + 128;
+		// Calculate metadata size from the actual metadata structure
+		const metadata = createPatchMetadata(
+			Math.floor(Date.now() / 1000),
+			flacColors,
+			menuColors
+		);
+		const metadataBytes = writePatchMetadata(metadata);
+		const METADATA_SIZE = metadataBytes.length;
 
-		// Generate handlers
+		// No protection area - code starts at beginning of NOP slide
+		const PROTECTION_SIZE = 0;
+
+		// Alignment for Menu handler (4-byte alignment for ARM instructions)
+		const ALIGNMENT = 4;
+
+		// Generate handlers first so we know their sizes
 		const flacHandler = this.generateFlacHandler(flacColors);
 		const menuHandler = this.generateMenuHandler(menuColors);
 
-		// Verify total code size fits in available space
-		const maxCodeSize = nopSlide.size - METADATA_SIZE;
-		const totalCodeSize = Math.max(flacHandler.length + PROTECTION_SIZE, menuHandler.length);
-		if (totalCodeSize > maxCodeSize) {
-			throw new ThemeError(
-				`Patch code (${totalCodeSize} bytes) exceeds available NOP slide space (${maxCodeSize} bytes)`
+		// Dynamically calculate offsets
+		const flacCodeOffset = PROTECTION_SIZE;
+		const flacCodeEnd = flacCodeOffset + flacHandler.length;
+
+		// Align menu handler start
+		const menuCodeOffset = Math.ceil(flacCodeEnd / ALIGNMENT) * ALIGNMENT;
+		const menuCodeEnd = menuCodeOffset + menuHandler.length;
+
+		// Metadata goes at the end
+		const metadataOffset = nopSlide.size - METADATA_SIZE;
+
+		// Calculate absolute addresses
+		const flacCodeAddr = nopSlide.start + flacCodeOffset;
+		const menuCodeAddr = nopSlide.start + menuCodeOffset;
+		const metadataAddr = nopSlide.start + metadataOffset;
+
+		// Verify everything fits
+		if (menuCodeEnd > metadataOffset) {
+			throw new CapacityError(
+				`Not enough space in NOP slide:\n` +
+				`  Available: ${nopSlide.size} bytes\n` +
+				`  FLAC handler: ${flacHandler.length} bytes (offset ${flacCodeOffset})\n` +
+				`  Menu handler: ${menuHandler.length} bytes (offset ${menuCodeOffset})\n` +
+				`  Metadata: ${METADATA_SIZE} bytes (offset ${metadataOffset})\n` +
+				`  Required: ${menuCodeEnd + METADATA_SIZE} bytes\n` +
+				`  Short by: ${menuCodeEnd - metadataOffset} bytes`
 			);
 		}
 
-		// Combine handlers with Python-compatible layout
+		// SAFETY CHECK: Verify all bytes to be overwritten are NOPs (0x00)
+		this.verifyNopSlideSafety(nopSlide, [
+			{ start: nopSlide.start + flacCodeOffset, end: nopSlide.start + flacCodeEnd, name: 'FLAC handler' },
+			{ start: nopSlide.start + menuCodeOffset, end: nopSlide.start + menuCodeEnd, name: 'Menu handler' },
+			{ start: metadataAddr, end: nopSlide.end, name: 'metadata' }
+		]);
+
+		// Build the complete code buffer
 		const code = new Uint8Array(nopSlide.size);
-		code.set(flacHandler, PROTECTION_SIZE);
-		code.set(menuHandler, 128);
+		code.set(flacHandler, flacCodeOffset);
+		code.set(menuHandler, menuCodeOffset);
+		// Metadata will be written separately in patch() method
 
 		return {
 			flacCodeAddr,
 			menuCodeAddr,
-			code
+			code,
+			metadataAddr
 		};
+	}
+
+	/**
+	 * Verify that all bytes to be written are NOPs (0x00)
+	 *
+	 * This ensures we don't overwrite non-NOP-slide code or data.
+	 * Takes an array of ranges to check, making it flexible for different layouts.
+	 */
+	private verifyNopSlideSafety(
+		nopSlide: NopSlide,
+		ranges: { start: number; end: number; name: string }[]
+	): void {
+		const nonNopPositions: { offset: number; value: number; range: string }[] = [];
+
+		for (const range of ranges) {
+			// Clamp range to NOP slide boundaries
+			const clampedStart = Math.max(range.start, nopSlide.start);
+			const clampedEnd = Math.min(range.end, nopSlide.end);
+
+			for (let offset = clampedStart; offset < clampedEnd; offset++) {
+				if (this.data[offset] !== 0x00) {
+					nonNopPositions.push({ offset, value: this.data[offset], range: range.name });
+				}
+			}
+		}
+
+		if (nonNopPositions.length > 0) {
+			const message = `Safety check failed: NOP slide contains non-NOP bytes\n` +
+				`NOP Slide: 0x${nopSlide.start.toString(16)} - 0x${nopSlide.end.toString(16)} (${nopSlide.size} bytes)\n` +
+				`Found ${nonNopPositions.length} non-NOP bytes:\n` +
+				nonNopPositions.slice(0, 10).map(p =>
+					`  0x${p.offset.toString(16)}: 0x${p.value.toString(16).padStart(2, '0')} (${p.range})`
+				).join('\n') +
+				(nonNopPositions.length > 10 ? `\n  ... and ${nonNopPositions.length - 10} more` : '');
+			throw new ThemeError(message);
+		}
 	}
 
 	/**
@@ -265,28 +361,29 @@ export class ThemePatcher {
 		}
 
 		// Select color based on R1 (theme index in R1 when handler is called)
-		// Check R1 and move appropriate color to R0
+		// We cannot use IT blocks with MOV, so use conditional branches instead
 
-		// CMP R1, #4
-		code.push(0x04, 0x29);  // CMP R1, #4
+	// CMP R1, #4
+	code.push(0x04, 0x29);  // CMP R1, #4
 
-		// ITE EQ
-		code.push(0x0C, 0xBF);  // ITE EQ
+	// B.EQ theme_4 (forward branch to MOV R0, R8 instruction)
+	// Target is 2 instructions ahead (skip MOV R0, R4 and B), offset = 1 word
+	// 16-bit conditional branch: offset is in words (2 bytes)
+	code.push(0x01, 0xD0);  // B.EQ +1 word
 
-		// MOVWEQ R0, R8  (theme 4)
-		// Use ADD R0, R0, R8 which is equivalent to MOV R0, R8
-		// Note: MOV (high register) doesn't work in IT blocks, but ADD does
-		// Encoding: 0x4440 in little-endian = bytes 40 44
-		code.push(0x40, 0x44);  // ADD R0, R8 (works in IT block)
+	// Theme 0-3: Move R4 to R0
+	// MOV R0, R4 (low registers)
+	code.push(0x20, 0x1C);  // MOV R0, R4
 
-		// MOVWNE R0, R4 (themes 0-3, but we need to handle 0-3 individually)
-		// For simplicity: themes 0-3 all use R4 (same color)
-		// Use low-register MOV which works in IT blocks
-		// Encoding: 0x1C20 in little-endian = bytes 20 1C
-		code.push(0x20, 0x1C);  // MOV R0, R4 (works in IT block)
+	// B end (skip theme 4 code, branch to next instruction which is BX LR)
+	code.push(0x00, 0xE0);  // B +0 (to BX LR)
 
-		// BX LR
-		code.push(0x70, 0x47); // BX LR
+	// theme_4: Move R8 to R0
+	// MOV R0, R8 (high register move)
+	code.push(0x40, 0x44);  // MOV R0, R8
+
+	// end: BX LR
+	code.push(0x70, 0x47); // BX LR
 
 		return new Uint8Array(code);
 	}
@@ -319,7 +416,9 @@ export class ThemePatcher {
 	 * Apply patch at address
 	 */
 	private applyPatch(data: Uint8Array, patchAddr: number, targetAddr: number): void {
+		console.error(`[DEBUG] applyPatch: patchAddr=0x${patchAddr.toString(16)}, targetAddr=0x${targetAddr.toString(16)}`);
 		const blInstruction = encodeBl(patchAddr, targetAddr);
+		console.error(`[DEBUG] BL bytes: ${Array.from(blInstruction).map(b => '0x' + b.toString(16).padStart(2, '0')).join(' ')}`);
 		data.set(blInstruction, patchAddr);
 	}
 

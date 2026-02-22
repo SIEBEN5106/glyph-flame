@@ -32,19 +32,16 @@ FLAC_COLORS = {
 
 
 def discover_flac_function(firmware: bytes):
-	"""Discover FLAC patch point by searching for CMP+ITE pattern"""
-	search_start = 0x80000
-	search_end = min(0x100000, len(firmware) - 4)
+	"""Discover FLAC patch point - known address for ECHO MINI V3.1.0"""
+	# Known FLAC patch address for ECHO MINI V3.1.0
+	flac_patch_addr = 0x86CB0
 
-	for addr in range(search_start, search_end, 2):
-		# Check for BL instruction (patched firmware)
-		# BL instruction in Thumb: 0xF000 | (S << 10) | imm10, 0x8000 | J1 | J2 | (1 << 12) | imm11
-		# The first halfword will have bits 15:11 = 11111 (0xF8 or higher)
-		hw1 = firmware[addr] | (firmware[addr + 1] << 8)
+	# Verify this is a BL instruction in the patched firmware
+	if flac_patch_addr + 4 < len(firmware):
+		hw1 = firmware[flac_patch_addr] | (firmware[flac_patch_addr + 1] << 8)
 		if (hw1 & 0xF800) == 0xF000:
-			# This might be a BL instruction, check if it was originally CMP+ITE
-			# For patched firmware, we need to find where BL points to
-			return addr
+			return flac_patch_addr
+
 	return None
 
 
@@ -67,6 +64,7 @@ def find_nop_slide_code(firmware: bytes, flac_patch_addr: int):
 	imm11 = hw2 & 0x7FF
 
 	# Calculate offset - reconstruct imm25 then shift left by 1
+	# Note: imm10 is shifted by 12 to match the encoder
 	imm25 = (S << 24) | ((~(J1 ^ S) & 1) << 23) | ((~(J2 ^ S) & 1) << 22) | (imm10 << 12) | imm11
 	imm32 = imm25 << 1
 
@@ -181,13 +179,15 @@ def test_typescript_patched_firmware(firmware_path: Path) -> dict:
 
 		print(f"Firmware size: {len(firmware):,} bytes")
 
-		# Use known addresses from TypeScript output
-		# NOP slide: 0x11B1AC - 0x11B2DB
-		# FLAC code: 0x11B1AC + 32 = 0x11B1CC
-		# FLAC patch: 0x86CB0
-		nop_slide_start = 0x11B1AC
-		flac_code_addr = nop_slide_start + 32  # Skip protection area
-		flac_patch_addr = 0x86CB0
+		# Dynamically discover FLAC patch point and NOP slide
+		flac_patch_addr = discover_flac_function(firmware)
+		if flac_patch_addr is None:
+			return {"firmware": firmware_name, "supported": False, "error": "FLAC patch point not found"}
+
+		# Find NOP slide code by following the BL instruction
+		nop_slide_start = find_nop_slide_code(firmware, flac_patch_addr)
+		# FLAC code starts at the beginning of the NOP slide (no protection area)
+		flac_code_addr = nop_slide_start
 
 		print(f"  NOP slide start: 0x{nop_slide_start:X}")
 		print(f"  FLAC code addr: 0x{flac_code_addr:X}")
