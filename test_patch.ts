@@ -12,7 +12,17 @@ import { ThemePatcher } from './src/lib/rse/theme/patcher.js';
 
 // Test colors (using original firmware colors for verification)
 const FLAC_COLORS = [0x44DE, 0x44DE, 0x44DE, 0x44DE, 0xE162];
-const MENU_COLORS = Array(15).fill(0xEF5D);  // Use simple test values
+
+// Menu: 15 colors (3 per theme: R1, R2, R3 attributes)
+// T0: cyan, dark gray, black | T1: white, dark gray, white
+// T2: cyan, black, dark gray | T3: white, black, black | T4: white, black, black
+const MENU_COLORS = [
+	0x77DE, 0x2945, 0x0000,  // T0
+	0xFFFF, 0x2945, 0xFFFF,  // T1
+	0x77DE, 0x0000, 0x2945,  // T2
+	0xFFFF, 0x0000, 0x0000,  // T3
+	0xFFFF, 0x0000, 0x0000,  // T4
+];
 
 // Firmware file to patch
 const FIRMWARE_PATH = '/tmp/echo-mini-firmwares/ECHO MINI V3.1.0/ECHO MINI V3.1.0/HIFIEC10.IMG';

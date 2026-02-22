@@ -22,20 +22,23 @@ except ImportError:
 	sys.exit(1)
 
 # Expected colors for each theme index
+# FLAC: 5 colors (one per theme)
 FLAC_COLORS = {
-	0: 0x44DE,
+	0: 0x44DE,  # T0-T3: blue
 	1: 0x44DE,
 	2: 0x44DE,
 	3: 0x44DE,
-	4: 0xE162,
+	4: 0xE162,  # T4: gold
 }
 
+# Menu: 15 colors (3 per theme: R1, R2, R3 attributes)
+# Based on ground truth from firmware analysis
 MENU_COLORS = {
-	0: 0xEF5D,
-	1: 0x10C3,
-	2: 0xFF1C,
-	3: 0xC6FC,
-	4: 0xCC29,
+	0: [0x77DE, 0x2945, 0x0000],  # T0: cyan, dark gray, black
+	1: [0xFFFF, 0x2945, 0xFFFF],  # T1: white, dark gray, white
+	2: [0x77DE, 0x0000, 0x2945],  # T2: cyan, black, dark gray
+	3: [0xFFFF, 0x0000, 0x0000],  # T3: white, black, black
+	4: [0xFFFF, 0x0000, 0x0000],  # T4: white, black, black
 }
 
 FLAC_SIGNATURE = bytes([0x04, 0x29, 0x0C, 0xBF])  # CMP R1,#4 + ITE EQ
@@ -169,6 +172,11 @@ def test_menu_colors_static(firmware: bytes, firmware_name: str) -> dict:
 	"""Test Menu colors by static verification (search for MOVW instructions)"""
 	print(f"\n  Testing Menu colors (static verification)")
 
+	# Flatten the expected colors into a set for easier lookup
+	expected_colors = set()
+	for theme_colors in MENU_COLORS.values():
+		expected_colors.update(theme_colors)
+
 	# Search for MOVW instructions with expected colors
 	found_colors = {}
 	search_start = 0x30000
@@ -184,28 +192,42 @@ def test_menu_colors_static(firmware: bytes, firmware_name: str) -> dict:
 			imm8 = hw2 & 0xFF
 			imm16 = (imm4 << 12) | (i << 11) | (imm3 << 8) | imm8
 
-			if imm16 in MENU_COLORS.values():
+			if imm16 in expected_colors:
 				if imm16 not in found_colors:
 					found_colors[imm16] = []
 				found_colors[imm16].append(addr)
 
+	# Verify all expected colors are found
 	results = {}
 	all_passed = True
 
-	for theme_idx, expected_color in MENU_COLORS.items():
-		if expected_color in found_colors:
-			results[theme_idx] = {"expected": expected_color, "found": True, "passed": True}
-			print(f"    ✅ Theme {theme_idx}: Color 0x{expected_color:04X} found")
-		else:
-			results[theme_idx] = {"expected": expected_color, "found": False, "passed": False}
-			print(f"    ❌ Theme {theme_idx}: Color 0x{expected_color:04X} NOT FOUND")
-			all_passed = False
+	for theme_idx, theme_colors in MENU_COLORS.items():
+		theme_passed = True
+		for color in theme_colors:
+			if color in found_colors:
+				results[f"T{theme_idx}_{color:04X}"] = {
+					"expected": color,
+					"found": True,
+					"passed": True
+				}
+				print(f"    ✅ T{theme_idx}: Color 0x{color:04X} found at 0x{found_colors[color][0]:X}")
+			else:
+				results[f"T{theme_idx}_{color:04X}"] = {
+					"expected": color,
+					"found": False,
+					"passed": False
+				}
+				print(f"    ❌ T{theme_idx}: Color 0x{color:04X} NOT FOUND")
+				theme_passed = False
+				all_passed = False
 
 	return {
 		"function": "Menu",
 		"firmware": firmware_name,
 		"results": results,
-		"all_passed": all_passed
+		"all_passed": all_passed,
+		"expected_count": len(expected_colors),
+		"found_count": len(found_colors)
 	}
 
 

@@ -30,6 +30,15 @@ FLAC_COLORS = {
 	4: 0xE162,  # Theme 4: gold
 }
 
+# Menu: 15 colors (3 per theme: R1, R2, R3 attributes)
+MENU_COLORS = [
+	0x77DE, 0x2945, 0x0000,  # T0: cyan, dark gray, black
+	0xFFFF, 0x2945, 0xFFFF,  # T1: white, dark gray, white
+	0x77DE, 0x0000, 0x2945,  # T2: cyan, black, dark gray
+	0xFFFF, 0x0000, 0x0000,  # T3: white, black, black
+	0xFFFF, 0x0000, 0x0000,  # T4: white, black, black
+]
+
 
 def discover_flac_function(firmware: bytes):
 	"""Discover FLAC patch point - known address for ECHO MINI V3.1.0"""
@@ -76,6 +85,25 @@ def find_nop_slide_code(firmware: bytes, flac_patch_addr: int):
 
 	# The target is the start of the patch code in NOP slide
 	return target
+
+
+def discover_menu_function(firmware: bytes):
+	"""Discover Menu patch point - known address for ECHO MINI V3.1.0"""
+	# Known Menu patch address for ECHO MINI V3.1.0
+	menu_patch_addr = 0x3F872
+
+	# Verify this is a BL instruction in the patched firmware
+	if menu_patch_addr + 4 < len(firmware):
+		hw1 = firmware[menu_patch_addr] | (firmware[menu_patch_addr + 1] << 8)
+		if (hw1 & 0xF800) == 0xF000:
+			return menu_patch_addr
+
+	return None
+
+
+def find_menu_code(firmware: bytes, menu_patch_addr: int):
+	"""Find Menu patch code by following the BL instruction"""
+	return find_nop_slide_code(firmware, menu_patch_addr)
 
 
 def emulate_typescript_flac(firmware: bytes, flac_code_addr: int, theme_idx: int, expected_color: int) -> dict:
@@ -166,6 +194,99 @@ def emulate_typescript_flac(firmware: bytes, flac_code_addr: int, theme_idx: int
 		}
 
 
+def emulate_typescript_menu(firmware: bytes, menu_code_addr: int) -> dict:
+	"""
+	Emulate the ACTUAL TypeScript-generated Menu code and verify it works
+
+	The Menu handler loads 15 colors into R0-R14 (15 registers).
+	This tests that all 15 colors are correctly loaded.
+	"""
+	print(f"\n  Testing Menu (TypeScript-generated code):")
+	print(f"    [code at 0x{menu_code_addr:X}]")
+
+	# Set up Unicorn with correct Thumb mode
+	uc = Uc(UC_ARCH_ARM, UC_MODE_THUMB)
+
+	# Align to page boundary
+	code_base = menu_code_addr & ~0xFFF
+
+	uc.mem_map(code_base, 0x10000, UC_PROT_READ | UC_PROT_WRITE | UC_PROT_EXEC)
+
+	# Copy the firmware code to the mapped memory
+	# Menu handler is larger: 15 colors × 4 bytes (MOVW+MOVT) + 2 bytes (BX LR) = 122 bytes
+	uc.mem_write(menu_code_addr, firmware[menu_code_addr:menu_code_addr + 256])
+
+	# Set up registers
+	uc.reg_write(UC_ARM_REG_CPSR, 0x000001F3)
+	uc.reg_write(UC_ARM_REG_LR, (menu_code_addr + 100) | 1)
+	uc.reg_write(UC_ARM_REG_PC, menu_code_addr | 1)
+
+	# Hook to stop at BX LR
+	def hook_code(uc, address, size, user_data):
+		try:
+			instr_bytes = uc.mem_read(address, 2)
+			if instr_bytes[0] == 0x70 and instr_bytes[1] == 0x47:  # BX LR
+				uc.emu_stop()
+		except:
+			pass
+
+	uc.hook_add(UC_HOOK_CODE, hook_code)
+
+	# Emulate
+	try:
+		uc.emu_start(menu_code_addr | 1, (menu_code_addr + 1000) | 1, 0, 100)
+
+		# Read all 15 registers R0-R14
+		actual_colors = []
+		for reg_num in range(15):
+			reg_value = uc.reg_read(eval(f"UC_ARM_REG_R{reg_num}"))
+			actual_colors.append(reg_value & 0xFFFF)  # Colors are 16-bit
+
+		# Verify all 15 colors match expected
+		all_passed = True
+		results = []
+
+		for i in range(15):
+			expected = MENU_COLORS[i]
+			actual = actual_colors[i]
+			theme = i // 3
+			attr = i % 3
+
+			if expected == actual:
+				results.append({
+					"index": i,
+					"theme": theme,
+					"attr": attr,
+					"expected": expected,
+					"actual": actual,
+					"passed": True
+				})
+				print(f"    ✅ [{i}] T{theme} attr{attr}: R{reg_num} = 0x{actual:04X}")
+			else:
+				results.append({
+					"index": i,
+					"theme": theme,
+					"attr": attr,
+					"expected": expected,
+					"actual": actual,
+					"passed": False
+				})
+				print(f"    ❌ [{i}] T{theme} attr{attr}: R{reg_num} = 0x{actual:04X} (expected 0x{expected:04X})")
+				all_passed = False
+
+		return {
+			"all_passed": all_passed,
+			"results": results
+		}
+
+	except UcError as e:
+		print(f"    ❌ {e}")
+		return {
+			"all_passed": False,
+			"error": str(e)
+		}
+
+
 def test_typescript_patched_firmware(firmware_path: Path) -> dict:
 	"""Test firmware patched by TypeScript"""
 	firmware_name = firmware_path.parent.name
@@ -211,14 +332,40 @@ def test_typescript_patched_firmware(firmware_path: Path) -> dict:
 			if not result.get("passed"):
 				flac_all_passed = False
 
-		supported = flac_all_passed
+		# Discover and test Menu handler
+		menu_patch_addr = discover_menu_function(firmware)
+		menu_results = None
+		menu_all_passed = True
+
+		if menu_patch_addr:
+			print(f"\n  Menu patch addr: 0x{menu_patch_addr:X}")
+
+			# Find Menu code address (follows BL from patch point)
+			# Menu code comes after FLAC handler, so it's aligned
+			# FLAC handler: 5 colors × 8 bytes (MOVW+MOVT) = 40 bytes
+			# Selection logic: 8 bytes (CMP, B.EQ, MOV, B, MOV, BX LR)
+			# Total FLAC: ~48 bytes, aligned to 4 bytes = 48 bytes
+			# Menu code starts at: nop_slide_start + 48
+			flac_handler_size = 5 * 8 + 8  # 5 colors × (MOVW+MOVT) + selection logic
+			menu_code_addr = nop_slide_start + ((flac_handler_size + 3) & ~3)  # 4-byte aligned
+
+			print(f"  Menu code addr: 0x{menu_code_addr:X}")
+
+			menu_result = emulate_typescript_menu(firmware, menu_code_addr)
+			menu_results = menu_result
+			menu_all_passed = menu_result.get("all_passed", False)
+		else:
+			print(f"\n  ⚠️  Menu patch point not found - skipping Menu tests")
+
+		supported = flac_all_passed and menu_all_passed
 
 		print(f"\n  Result: {'✅ PASS' if supported else '❌ FAIL'}")
 
 		return {
 			"firmware": firmware_name,
 			"supported": supported,
-			"flac": flac_results
+			"flac": flac_results,
+			"menu": menu_results
 		}
 
 	except Exception as e:
