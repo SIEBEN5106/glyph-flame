@@ -130,8 +130,10 @@ export class ThemePatcher {
 			}
 
 			// Find best NOP slide
+			// Need: FLAC (32 + 44) + Menu (128 + 124) + Metadata (51) = 379 bytes minimum
+			// But we can overlap: max(32 + 44, 128 + 124) + 51 = 252 + 51 = 303 bytes
 			const funcAddrs = analysis.themeFunctions.map(f => f.funcAddr);
-			const requiredSize = 250; // Approximate size needed
+			const requiredSize = 303; // Minimum size needed
 			const nopSlide = this.finder.selectBestSlide(funcAddrs, requiredSize);
 
 			if (!nopSlide) {
@@ -202,27 +204,43 @@ export class ThemePatcher {
 
 	/**
 	 * Create patch data structure
+	 *
+	 * Layout matches Python theme_patcher.py:
+	 * - Offset 0-31: Reserved for protection instruction (32 bytes)
+	 * - Offset 32: FLAC handler code
+	 * - Offset 128: Menu handler code
+	 * - End-51: Metadata
 	 */
 	private createPatchData(
 		flacColors: number[],
 		menuColors: number[],
 		nopSlide: NopSlide
 	): { flacCodeAddr: number; menuCodeAddr: number; code: Uint8Array } {
-		// FLAC handler code at start of NOP slide
-		const flacCodeAddr = nopSlide.start;
-		// Menu handler code after FLAC handler
-		const menuCodeAddr = nopSlide.start + 120; // Approximate FLAC handler size
+		// Reserve space for metadata at the end of NOP slide (51 bytes)
+		const METADATA_SIZE = 51;
+		const PROTECTION_SIZE = 32;
 
-		// Generate FLAC handler
+		// Match Python offsets exactly
+		const flacCodeAddr = nopSlide.start + PROTECTION_SIZE;
+		const menuCodeAddr = nopSlide.start + 128;
+
+		// Generate handlers
 		const flacHandler = this.generateFlacHandler(flacColors, flacCodeAddr);
-
-		// Generate Menu handler
 		const menuHandler = this.generateMenuHandler(menuColors, menuCodeAddr);
 
-		// Combine handlers
+		// Verify total code size fits in available space
+		const maxCodeSize = nopSlide.size - METADATA_SIZE;
+		const totalCodeSize = Math.max(flacHandler.length + PROTECTION_SIZE, menuHandler.length);
+		if (totalCodeSize > maxCodeSize) {
+			throw new ThemeError(
+				`Patch code (${totalCodeSize} bytes) exceeds available NOP slide space (${maxCodeSize} bytes)`
+			);
+		}
+
+		// Combine handlers with Python-compatible layout
 		const code = new Uint8Array(nopSlide.size);
-		code.set(flacHandler, 0);
-		code.set(menuHandler, 120);
+		code.set(flacHandler, PROTECTION_SIZE);
+		code.set(menuHandler, 128);
 
 		return {
 			flacCodeAddr,

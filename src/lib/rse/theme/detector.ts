@@ -276,6 +276,60 @@ export class PatchDetector {
 
 		return true;
 	}
+
+	/**
+	 * Extract colors from patched code region
+	 *
+	 * This traces into the NOP region and extracts colors from MOVW instructions
+	 * in the patch code.
+	 *
+	 * @param patchTarget - Address of patched code (NOP slide)
+	 * @param funcType - Type of function ('flac' or 'menu')
+	 * @returns Map of theme ID to color value
+	 */
+	extractPatchedColors(patchTarget: number, funcType: 'flac' | 'menu'): Map<number, number> {
+		const colors = new Map<number, number>();
+
+		if (patchTarget === 0) {
+			return colors;
+		}
+
+		const decoder = new ThumbDecoder(this.data);
+		const scanStart = patchTarget;
+		const scanEnd = Math.min(patchTarget + 500, this.data.length);
+
+		let offset = scanStart;
+		while (offset < scanEnd) {
+			const instr = decoder.decode(offset);
+
+			// Check for MOVW instruction
+			if (instr.mnemonic.toUpperCase().includes('MOVW') && instr.imm > 0) {
+				// Found a MOVW with non-zero immediate - likely a color
+				// Theme ID is determined by order of appearance
+				const themeId = colors.size;
+				const maxColors = funcType === 'flac' ? 5 : 15;
+
+				if (themeId < maxColors) {
+					colors.set(themeId, instr.imm);
+				}
+			}
+
+			// Stop if we hit all zeros (end of patch code)
+			if (this.data[offset] === 0x00 && this.data[offset + 1] === 0x00) {
+				// Check for more zeros
+				let zeroCount = 0;
+				for (let i = offset; i < Math.min(offset + 20, scanEnd); i++) {
+					if (this.data[i] === 0x00) zeroCount++;
+					else break;
+				}
+				if (zeroCount >= 8) break; // Found enough zeros to indicate end
+			}
+
+			offset += 2; // Thumb instructions are 2 or 4 bytes, but we're scanning linearly
+		}
+
+		return colors;
+	}
 }
 
 /**

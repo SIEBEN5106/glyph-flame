@@ -686,6 +686,112 @@ describe('Theme Patcher - Color Extraction Equivalence', () => {
 	});
 });
 
+describe('Theme Patcher - Round-trip Color Extraction', () => {
+	/**
+	 * Test complete round-trip: patch → detect → extract colors
+	 * This verifies we can read back colors from patched firmware
+	 */
+
+	it('should extract colors from patched FLAC firmware', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const originalFlacColors = [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000];
+		const menuColors = Array(15).fill(0xf800);
+
+		// Patch the firmware
+		const patcher = new ThemePatcher(firmwareData);
+		const result = patcher.patch(originalFlacColors, menuColors, '/tmp/test_roundtrip_flac.IMG', true);
+
+		expect(result.success).toBe(true);
+		expect(result.nopSlide).not.toBeNull();
+		expect(result.metadataAddr).toBeGreaterThan(0);
+
+		// Read back patched firmware
+		const patchedFirmware = fileIO.readFileSync('/tmp/test_roundtrip_flac.IMG');
+
+		// Extract colors from metadata
+		const detector = new PatchDetector(patchedFirmware, 'Unknown');
+		if (result.nopSlide) {
+			const metadata = detector.readPatchMetadata(result.nopSlide);
+
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				// Verify FLAC colors were preserved
+				expect(metadata.flacColors).toEqual(originalFlacColors);
+			}
+		}
+	});
+
+	it('should extract colors from patched Menu firmware', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const flacColors = [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000];
+		const originalMenuColors = [
+			0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000,
+			0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000,
+			0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000
+		];
+
+		// Patch the firmware
+		const patcher = new ThemePatcher(firmwareData);
+		const result = patcher.patch(flacColors, originalMenuColors, '/tmp/test_roundtrip_menu.IMG', true);
+
+		expect(result.success).toBe(true);
+		expect(result.nopSlide).not.toBeNull();
+		expect(result.metadataAddr).toBeGreaterThan(0);
+
+		// Read back patched firmware
+		const patchedFirmware = fileIO.readFileSync('/tmp/test_roundtrip_menu.IMG');
+
+		// Extract colors from metadata
+		const detector = new PatchDetector(patchedFirmware, 'Unknown');
+		if (result.nopSlide) {
+			const metadata = detector.readPatchMetadata(result.nopSlide);
+
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				// Verify Menu colors were preserved
+				expect(metadata.menuColors).toEqual(originalMenuColors);
+			}
+		}
+	});
+
+	it('should read patch metadata from patched firmware', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const originalFlacColors = [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000];
+		const originalMenuColors = Array(15).fill(0xf800);
+
+		// Patch the firmware
+		const patcher = new ThemePatcher(firmwareData);
+		const result = patcher.patch(originalFlacColors, originalMenuColors, '/tmp/test_roundtrip_metadata.IMG', true);
+
+		expect(result.success).toBe(true);
+		expect(result.nopSlide).not.toBeNull();
+		expect(result.metadataAddr).toBeGreaterThan(0);
+
+		// Read back and verify metadata
+		const patchedFirmware = fileIO.readFileSync('/tmp/test_roundtrip_metadata.IMG');
+		const detector = new PatchDetector(patchedFirmware, 'Unknown');
+
+		if (result.nopSlide) {
+			const metadata = detector.readPatchMetadata(result.nopSlide);
+
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				// Verify FLAC colors
+				expect(metadata.flacColors).toEqual(originalFlacColors);
+
+				// Verify Menu colors
+				expect(metadata.menuColors).toEqual(originalMenuColors);
+
+				// Verify metadata structure
+				expect(metadata.magic).toBe('ECHO');
+				expect(metadata.version).toBe(1);
+				// Timestamp is dynamic (current Unix time), so just verify it's reasonable
+				expect(metadata.timestamp).toBeGreaterThan(0);
+			}
+		}
+	});
+});
+
 describe('Theme Patcher - Batch Firmware Testing', () => {
 	/**
 	 * Test across all firmware versions to ensure compatibility
