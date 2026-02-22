@@ -3,50 +3,74 @@
  *
  * Finds unused regions in firmware that can be used for patch code.
  *
- * SAFETY: Avoids font data storage zones by using heuristics:
- * - Only considers regions in code section (<0x100000)
- * - Rejects very large regions (>64KB) likely to be font storage
- * - Prefers smaller regions (<10KB) typical of NOP slides
+ * HYBRID APPROACH:
+ * 1. Uses heuristics for selection (to match Python behavior)
+ * 2. Uses CODE REFERENCE ANALYSIS for safety verification
+ * 3. Generates protective jumps for functional NOP slides
+ *
+ * SAFETY VERIFICATION:
+ * - Scans branch instructions to identify NOP slide landing points
+ * - Verifies selected slides have zero code references
+ * - Rejects functional NOP slides (execution flow mechanism)
+ * - Provides data-driven safety instead of pure heuristics
  */
 
 import type { NopSlide } from './types.js';
+import { CodeReferenceAnalyzer } from './code-reference-analyzer.js';
+
+/** Functional NOP slide region - EXECUTION FLOW MECHANISM, DO NOT USE! */
+const FUNCTIONAL_NOP_START = 0x588A8;
+const FUNCTIONAL_NOP_END = 0x79B70;
 
 /** Maximum size for a region to be considered a NOP slide (larger = likely font storage) */
 const MAX_SAFE_SLIDE_SIZE = 65536; // 64KB
 
-/** Code section boundary (font data typically above this) */
-const CODE_SECTION_END = 0x100000;
-
 /**
  * NOP Slide Finder Class
+ *
+ * Hybrid approach: heuristics for selection (Python compatibility),
+ * code reference analysis for safety verification.
  */
 export class NopSlideFinder {
 	private readonly data: Readonly<Uint8Array>;
-	readonly MIN_SLIDE_SIZE = 128;
+	private readonly codeAnalyzer: CodeReferenceAnalyzer;
+	private readonly MIN_SLIDE_SIZE = 128;
 
 	constructor(firmwareData: Uint8Array) {
 		this.data = firmwareData;
+		this.codeAnalyzer = new CodeReferenceAnalyzer(firmwareData, {
+			scanEnd: Math.min(firmwareData.length, 0x1000000),
+			analyzeOnConstruct: false
+		});
 	}
 
 	/**
-	 * Check if a region is safe to use as a NOP slide (not font storage)
+	 * Check if a region overlaps with the functional NOP slide
+	 */
+	private overlapsFunctionalNopSlide(start: number, end: number): boolean {
+		return !(end <= FUNCTIONAL_NOP_START || start >= FUNCTIONAL_NOP_END);
+	}
+
+	/**
+	 * Check if a region is safe to use as a NOP slide
 	 */
 	private isSafeNopSlide(start: number, size: number): boolean {
-		// Rule 1: Must be in code section, not font storage area
-		if (start >= CODE_SECTION_END) {
-			return false; // Too high - likely font storage zone
+		// CRITICAL: Must not overlap functional NOP slide
+		if (this.overlapsFunctionalNopSlide(start, start + size)) {
+			return false;
 		}
 
-		// Rule 2: Reject very large regions (likely font data)
+		// Reject very large regions (likely font data storage)
 		if (size > MAX_SAFE_SLIDE_SIZE) {
-			return false; // Too large - probably font storage, not NOP slide
+			return false;
 		}
 
 		return true;
 	}
 
 	/**
-	 * Find all NOP slide regions in firmware
+	 * Find all NOP slide regions using heuristic scan
+	 * Returns slides sorted by size (largest first)
 	 */
 	findAllSlides(): NopSlide[] {
 		const slides: NopSlide[] = [];
@@ -65,7 +89,7 @@ export class NopSlideFinder {
 
 				const size = i - start;
 
-				// Apply safety checks to avoid font storage zones
+				// Apply safety checks
 				if (size >= this.MIN_SLIDE_SIZE && this.isSafeNopSlide(start, size)) {
 					slides.push({
 						start,
@@ -81,12 +105,13 @@ export class NopSlideFinder {
 			}
 		}
 
-		// Sort by size descending (keep original behavior for selectBestSlide)
+		// Sort by size descending (largest first)
 		return slides.sort((a, b) => b.size - a.size);
 	}
 
 	/**
-	 * Select best NOP slide for patching
+	 * Select best NOP slide for patching using heuristics (Python-compatible)
+	 * Then verify with code reference analysis for safety
 	 *
 	 * @param funcAddrs - Addresses of functions that will link to this slide
 	 * @param requiredSize - Minimum size needed
@@ -135,12 +160,46 @@ export class NopSlideFinder {
 			return a.maxDistance - b.maxDistance;
 		});
 
-		// Return a copy with updated source
-		const best = candidates[0].slide;
-		return {
-			...best,
-			source: 'selected' as const
-		};
+		// Get best candidate from heuristics
+		const bestCandidate = candidates[0].slide;
+
+		// SAFETY VERIFICATION: Use code reference analysis to verify safety
+		// This ensures we're not using a functional NOP slide
+		try {
+			const analysis = this.codeAnalyzer.analyze();
+
+			// Check if the selected slide has any code references
+			const hasReferences = analysis.landingPoints.some(
+				lp => lp.inNopSlide &&
+					lp.nopSlideStart === bestCandidate.start &&
+					lp.referenceCount > 0
+			);
+
+			if (hasReferences) {
+				// Selected slide has code references - try to find a safer one
+				const safeCandidate = candidates.find(c => {
+					const slideRef = analysis.landingPoints.some(
+						lp => lp.inNopSlide &&
+							lp.nopSlideStart === c.slide.start &&
+							lp.referenceCount > 0
+					);
+					return !slideRef;
+				});
+
+				if (safeCandidate) {
+					return safeCandidate.slide;
+				}
+
+				// No safe candidate found - return null instead of risking functional NOP slide
+				console.warn(`Best NOP slide at 0x${bestCandidate.start.toString(16)} has code references`);
+				return null;
+			}
+		} catch (error) {
+			// Code reference analysis failed - proceed with caution
+			console.warn('Code reference analysis failed, using heuristic selection:', error);
+		}
+
+		return bestCandidate;
 	}
 
 	/**
@@ -207,5 +266,21 @@ export class NopSlideFinder {
 		}
 
 		return distances;
+	}
+
+	/**
+	 * Get detailed code reference analysis results
+	 * Performs full analysis (can be slow)
+	 */
+	getDetailedAnalysis() {
+		return this.codeAnalyzer.analyze();
+	}
+
+	/**
+	 * Generate protection code for functional NOP slide
+	 * Returns B instruction bytes that jump over injected code
+	 */
+	generateProtectionCode(fromAddr: number, toAddr: number): Uint8Array {
+		return this.codeAnalyzer.generateProtectionCode(fromAddr, toAddr);
 	}
 }

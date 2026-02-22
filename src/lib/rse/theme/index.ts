@@ -23,6 +23,18 @@ export { ControlFlowSimulator } from './simulator.js';
 // NOP slide finding
 export { NopSlideFinder } from './nop-slide.js';
 
+// Code reference analysis
+export {
+	CodeReferenceAnalyzer,
+	analyzeCodeReferences
+} from './code-reference-analyzer.js';
+
+export type {
+	BranchTarget,
+	LandingPoint,
+	NopSlideAnalysis
+} from './code-reference-analyzer.js';
+
 // Patch detection
 export { PatchDetector, createPatchInfo, detectFirmwarePatched } from './detector.js';
 
