@@ -156,16 +156,21 @@ export function encodePush(regs: number[]): Uint8Array {
 	}
 
 	let regList = 0;
+	let hasLr = false;
 	for (const r of regs) {
 		if (r === 14) {
-			regList |= 0x100;
+			hasLr = true;
 		} else if (r >= 0 && r <= 7) {
 			regList |= 1 << r;
 		}
 	}
 
-	const opcode = 0xb400 | (regList >> 8);
-	return new Uint8Array([opcode & 0xff, (opcode >> 8) & 0xff, regList & 0xff]);
+	// ARM Thumb PUSH encoding:
+	// PUSH {Rlist}     = 0xB400 | regList  (R0-R7 only)
+	// PUSH {Rlist, LR} = 0xB500 | regList  (R0-R7 + LR)
+	// 16-bit instruction in little-endian: [low_byte, high_byte]
+	const opcode = hasLr ? (0xb500 | regList) : (0xb400 | regList);
+	return new Uint8Array([opcode & 0xff, (opcode >> 8) & 0xff]);
 }
 
 /**
@@ -182,16 +187,21 @@ export function encodePop(regs: number[]): Uint8Array {
 	}
 
 	let regList = 0;
+	let hasPc = false;
 	for (const r of regs) {
 		if (r === 15) {
-			regList |= 0x100;
+			hasPc = true;
 		} else if (r >= 0 && r <= 7) {
 			regList |= 1 << r;
 		}
 	}
 
-	const opcode = 0xbc00 | (regList >> 8);
-	return new Uint8Array([opcode & 0xff, (opcode >> 8) & 0xff, regList & 0xff]);
+	// ARM Thumb POP encoding:
+	// POP {Rlist}    = 0xBC00 | regList  (R0-R7 only)
+	// POP {Rlist, PC} = 0xBD00 | regList  (R0-R7 + PC)
+	// 16-bit instruction in little-endian: [low_byte, high_byte]
+	const opcode = hasPc ? (0xbd00 | regList) : (0xbc00 | regList);
+	return new Uint8Array([opcode & 0xff, (opcode >> 8) & 0xff]);
 }
 
 /**

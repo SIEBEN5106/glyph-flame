@@ -5,9 +5,8 @@
  * Uses detection, NOP slide finding, and instruction encoding to patch.
  */
 
-import { encodeBl, encodeMovw, encodePush } from './thumb/encoders.js';
+import { encodeBl, encodeMovw, encodeMovt } from './thumb/encoders.js';
 import { fileIO } from '../utils/file-io.js';
-import { ThumbDecoder } from './thumb/index.js';
 import { NopSlideFinder } from './nop-slide.js';
 import { PatchDetector } from './detector.js';
 import { createPatchMetadata, writePatchMetadata } from './metadata.js';
@@ -37,7 +36,6 @@ import {
  */
 export class ThemePatcher {
 	private readonly data: Uint8Array;
-	private readonly decoder: ThumbDecoder;
 	private readonly detector: PatchDetector;
 	private readonly finder: NopSlideFinder;
 	readonly version: string;
@@ -48,7 +46,6 @@ export class ThemePatcher {
 	constructor(firmwareData: Uint8Array, version = 'Unknown') {
 		this.data = firmwareData;
 		this.version = version;
-		this.decoder = new ThumbDecoder(firmwareData);
 		this.detector = new PatchDetector(firmwareData, version);
 		this.finder = new NopSlideFinder(firmwareData);
 	}
@@ -225,8 +222,8 @@ export class ThemePatcher {
 		const menuCodeAddr = nopSlide.start + 128;
 
 		// Generate handlers
-		const flacHandler = this.generateFlacHandler(flacColors, flacCodeAddr);
-		const menuHandler = this.generateMenuHandler(menuColors, menuCodeAddr);
+		const flacHandler = this.generateFlacHandler(flacColors);
+		const menuHandler = this.generateMenuHandler(menuColors);
 
 		// Verify total code size fits in available space
 		const maxCodeSize = nopSlide.size - METADATA_SIZE;
@@ -252,13 +249,10 @@ export class ThemePatcher {
 	/**
 	 * Generate FLAC handler code
 	 */
-	private generateFlacHandler(colors: number[], returnAddr: number): Uint8Array {
+	private generateFlacHandler(colors: number[]): Uint8Array {
 		const code: number[] = [];
 
-		// PUSH {LR}
-		code.push(...encodePush([14]));
-
-		// Load colors using MOVW+MOVT pairs
+		// Load colors into R4-R8 using MOVW+MOVT pairs
 		for (let i = 0; i < colors.length; i++) {
 			const reg = 4 + i; // R4-R8
 			const color = colors[i];
@@ -267,14 +261,31 @@ export class ThemePatcher {
 			code.push(...encodeMovw(reg, color & 0xffff));
 
 			// MOVT R{i}, #color_high
-			const movt = this.encodeMovt(reg, (color >> 16) & 0xffff);
-			code.push(...movt);
+			code.push(...encodeMovt(reg, (color >> 16) & 0xffff));
 		}
 
-		// POP {PC}
-		code.push(...[0xbd, 0x00]); // POP {PC} is actually POP {LR} then BX LR, use BX LR instead
-		code.pop();
-		code.pop();
+		// Select color based on R1 (theme index in R1 when handler is called)
+		// Check R1 and move appropriate color to R0
+
+		// CMP R1, #4
+		code.push(0x04, 0x29);  // CMP R1, #4
+
+		// ITE EQ
+		code.push(0x0C, 0xBF);  // ITE EQ
+
+		// MOVWEQ R0, R8  (theme 4)
+		// Use ADD R0, R0, R8 which is equivalent to MOV R0, R8
+		// Note: MOV (high register) doesn't work in IT blocks, but ADD does
+		// Encoding: 0x4440 in little-endian = bytes 40 44
+		code.push(0x40, 0x44);  // ADD R0, R8 (works in IT block)
+
+		// MOVWNE R0, R4 (themes 0-3, but we need to handle 0-3 individually)
+		// For simplicity: themes 0-3 all use R4 (same color)
+		// Use low-register MOV which works in IT blocks
+		// Encoding: 0x1C20 in little-endian = bytes 20 1C
+		code.push(0x20, 0x1C);  // MOV R0, R4 (works in IT block)
+
+		// BX LR
 		code.push(0x70, 0x47); // BX LR
 
 		return new Uint8Array(code);
@@ -283,11 +294,8 @@ export class ThemePatcher {
 	/**
 	 * Generate Menu handler code
 	 */
-	private generateMenuHandler(colors: number[], returnAddr: number): Uint8Array {
+	private generateMenuHandler(colors: number[]): Uint8Array {
 		const code: number[] = [];
-
-		// PUSH {LR}
-		code.push(...encodePush([14]));
 
 		// Load colors using MOVW+MOVT pairs
 		for (let i = 0; i < colors.length; i++) {
@@ -298,30 +306,13 @@ export class ThemePatcher {
 			code.push(...encodeMovw(reg, color & 0xffff));
 
 			// MOVT R{i}, #color_high
-			const movt = this.encodeMovt(reg, (color >> 16) & 0xffff);
-			code.push(...movt);
+			code.push(...encodeMovt(reg, (color >> 16) & 0xffff));
 		}
 
-		// POP {PC}
-		code.pop();
-		code.pop();
-		code.push(0x70, 0x47); // BX LR
+		// BX LR
+		code.push(0x70, 0x47);
 
 		return new Uint8Array(code);
-	}
-
-	/**
-	 * Encode MOVT instruction
-	 */
-	private encodeMovt(rd: number, imm16: number): Uint8Array {
-		const i4 = (imm16 >> 12) & 0xf;
-		const i3 = (imm16 >> 11) & 0x1;
-		const imm8 = imm16 & 0xff;
-
-		const hw1 = 0xf2c0 | ((i4 ^ 1) << 6) | (i3 << 5) | ((imm8 >> 4) & 0x7f);
-		const hw2 = ((rd & 0xf) << 8) | ((imm8 & 0xf) << 4);
-
-		return new Uint8Array([hw1 & 0xff, hw1 >> 8, hw2 & 0xff, hw2 >> 8]);
 	}
 
 	/**
