@@ -247,13 +247,17 @@ export class CodeReferenceAnalyzer {
 			}
 
 			// Check for POP {..., PC}
-			if (mnem === 'POP' && instr.registers?.includes(15)) { // PC is R15
-				return {
-					sourceAddr: addr,
-					targetAddr: 0, // Will be determined at runtime
-					branchType: 'pop_pc',
-					instruction: instr.toString()
-				};
+			// POP includes PC if operands contain 'pc' or register list includes R15
+			if (mnem === 'POP') {
+				const ops = instr.operands.toLowerCase();
+				if (ops.includes('pc') || ops.includes('r15') || ops.includes('lr')) {
+					return {
+						sourceAddr: addr,
+						targetAddr: 0, // Will be determined at runtime
+						branchType: 'pop_pc',
+						instruction: instr.toString()
+					};
+				}
 			}
 
 		} catch {
@@ -364,7 +368,7 @@ export class CodeReferenceAnalyzer {
 	private buildLandingPointMap(): void {
 		// Count references to each target
 		const refCounts = new Map<number, number[]>();
-		for (const bt of this.branchTargets) {
+		for (const bt of this.branchTargets!) {
 			if (bt.targetAddr > 0) {
 				if (!refCounts.has(bt.targetAddr)) {
 					refCounts.set(bt.targetAddr, []);
@@ -379,14 +383,15 @@ export class CodeReferenceAnalyzer {
 		// Create landing points
 		for (const [target, sources] of refCounts.entries()) {
 			const inNopSlide = this.isInNopSlide(target, nopSlideMap);
+			const slideInfo = inNopSlide ? nopSlideMap.get(target) : undefined;
 
-			this.landingPoints.set(target, {
+			this.landingPoints!.set(target, {
 				addr: target,
 				referenceCount: sources.length,
 				sources,
 				inNopSlide,
-				nopSlideStart: inNopSlide ? nopSlideMap.get(target)!.start : undefined,
-				nopSlideEnd: inNopSlide ? nopSlideMap.get(target)!.end : undefined,
+				nopSlideStart: slideInfo?.start,
+				nopSlideEnd: slideInfo?.end,
 				isProtected: false // Will be updated later
 			});
 		}
@@ -437,7 +442,7 @@ export class CodeReferenceAnalyzer {
 		// Group landing points by NOP slide
 		const slideLandings = new Map<number, number[]>();
 
-		for (const lp of this.landingPoints.values()) {
+		for (const lp of this.landingPoints!.values()) {
 			if (lp.inNopSlide && lp.nopSlideStart !== undefined) {
 				if (!slideLandings.has(lp.nopSlideStart)) {
 					slideLandings.set(lp.nopSlideStart, []);
@@ -465,7 +470,7 @@ export class CodeReferenceAnalyzer {
 			const size = end - start;
 			const landings = slideLandings.get(start) || [];
 			const refCount = landings.reduce((sum, addr) => {
-				const lp = this.landingPoints.get(addr);
+				const lp = this.landingPoints!.get(addr);
 				return sum + (lp?.referenceCount || 0);
 			}, 0);
 
@@ -532,7 +537,7 @@ export class CodeReferenceAnalyzer {
 				}
 			}
 
-			this.nopSlides.set(start, {
+			this.nopSlides!.set(start, {
 				start,
 				end,
 				size,
