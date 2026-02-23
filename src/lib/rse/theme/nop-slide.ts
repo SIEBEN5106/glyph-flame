@@ -34,7 +34,7 @@ const MAX_SAFE_SLIDE_SIZE = 65536; // 64KB
 export class NopSlideFinder {
 	private readonly data: Readonly<Uint8Array>;
 	private readonly codeAnalyzer: CodeReferenceAnalyzer;
-	private readonly MIN_SLIDE_SIZE = 128;
+	private readonly MIN_SLIDE_SIZE = 256;  // Minimum 256 bytes for safety (alignment + metadata)
 
 	constructor(firmwareData: Uint8Array) {
 		this.data = firmwareData;
