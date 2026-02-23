@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Window, WindowBody, TitleBar, Button, GroupBox } from '$lib/components/98css';
+	import { Window, WindowBody, TitleBar, Button, GroupBox, TableView, type TableRow, type TableCell } from '$lib/components/98css';
 
 	export interface ColorDetail {
 		semantic: string;
@@ -30,28 +30,113 @@
 		return `rgb(${r}, ${g}, ${b})`;
 	};
 
-	const rgb565ToComponents = (color: number) => {
-		const r = (color >> 11) & 0x1f;
-		const g = (color >> 5) & 0x3f;
-		const b = color & 0x1f;
-		return { r, g, b };
-	};
+	const instructionRows = $derived.by<TableRow[]>(() => {
+		const rows: TableRow[] = [];
 
-	const formatBytes = (bytes: number[] | undefined): string => {
-		if (!bytes || bytes.length === 0) return 'N/A';
-		return bytes.map((b) => '0x' + b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
-	};
+		if (detail.semantic.includes('Codec Info') || detail.semantic.includes('FLAC')) {
+			// FLAC format: FLAC: 0x44DE, then MOVW, then STRH
+			rows.push({
+				cells: [
+					{ content: 'FLAC', class: 'mono' },
+					{ content: '0x' + detail.color.toString(16).padStart(4, '0').toUpperCase(), class: 'mono' }
+				]
+			});
 
-	const components = $derived(rgb565ToComponents(detail.color));
+			if (detail.movwAddress && detail.movwInstruction) {
+				rows.push({
+					cells: [
+						{ content: detail.movwAddress, class: 'mono' },
+						{ content: detail.movwInstruction, class: 'mono' }
+					]
+				});
+			} else {
+				rows.push({
+					cells: [
+						{ content: '(preload)', class: 'mono' },
+						{ content: '(preload)', class: 'mono' }
+					]
+				});
+			}
+
+			if (detail.strhAddress && detail.strhInstruction) {
+				rows.push({
+					cells: [
+						{ content: detail.strhAddress, class: 'mono' },
+						{ content: detail.strhInstruction, class: 'mono' }
+					]
+				});
+			} else {
+				rows.push({
+					cells: [
+						{ content: '-', class: 'mono' },
+						{ content: '-', class: 'mono' }
+					]
+				});
+			}
+		} else {
+			// Menu format: R3: 0x0000, then MOVW, then STRH
+			if (detail.register !== undefined) {
+				rows.push({
+					cells: [
+						{ content: 'R' + detail.register, class: 'mono' },
+						{ content: '0x' + detail.color.toString(16).padStart(4, '0').toUpperCase(), class: 'mono' }
+					]
+				});
+			} else {
+				rows.push({
+					cells: [
+						{ content: '-', class: 'mono' },
+						{ content: '0x' + detail.color.toString(16).padStart(4, '0').toUpperCase(), class: 'mono' }
+					]
+				});
+			}
+
+			if (detail.movwAddress && detail.movwInstruction) {
+				rows.push({
+					cells: [
+						{ content: detail.movwAddress, class: 'mono' },
+						{ content: detail.movwInstruction, class: 'mono' }
+					]
+				});
+			} else {
+				rows.push({
+					cells: [
+						{ content: '(preload)', class: 'mono' },
+						{ content: '(preload)', class: 'mono' }
+					]
+				});
+			}
+
+			if (detail.strhAddress && detail.strhInstruction) {
+				rows.push({
+					cells: [
+						{ content: detail.strhAddress, class: 'mono' },
+						{ content: detail.strhInstruction, class: 'mono' }
+					]
+				});
+			} else {
+				rows.push({
+					cells: [
+						{ content: '-', class: 'mono' },
+						{ content: '-', class: 'mono' }
+					]
+				});
+			}
+		}
+
+		return rows;
+	});
+
+	const instructionHeaders = ['Key', 'Value'];
 </script>
 
 <div class="color-detail-wrapper">
-	<Window width="550px">
+	<Window width="480px">
 		<TitleBar onclose={onclose}>Color Properties</TitleBar>
 		<WindowBody>
 			<div class="detail-layout">
 				<!-- Preview Section -->
-				<GroupBox title="Preview">
+				<GroupBox>
 					<div class="preview-section">
 						<div class="color-preview-large" style="background-color: {rgb565ToCss(detail.color)};">
 						</div>
@@ -76,93 +161,12 @@
 					</div>
 				</GroupBox>
 
-				<!-- Technical Details -->
-				<GroupBox title="Technical Details">
-					<div class="technical-section">
-						<div class="info-row">
-							<span class="label">RGB565 Value:</span>
-							<span class="value mono">0x{detail.color.toString(16).padStart(4, '0').toUpperCase()}</span>
-						</div>
-						<div class="info-row">
-							<span class="label">Decimal:</span>
-							<span class="value mono">{detail.color}</span>
-						</div>
-						<div class="info-row">
-							<span class="label">Binary:</span>
-							<span class="value mono binary">{detail.color.toString(2).padStart(16, '0')}</span>
-						</div>
-						<div class="separator"></div>
-						<div class="info-row">
-							<span class="label">Red (5-bit):</span>
-							<span class="value mono">{components.r} (0x{components.r.toString(16).toUpperCase()})</span>
-						</div>
-						<div class="info-row">
-							<span class="label">Green (6-bit):</span>
-							<span class="value mono">{components.g} (0x{components.g.toString(16).toUpperCase()})</span>
-						</div>
-						<div class="info-row">
-							<span class="label">Blue (5-bit):</span>
-							<span class="value mono">{components.b} (0x{components.b.toString(16).toUpperCase()})</span>
-						</div>
-						<div class="separator"></div>
-						<div class="info-row">
-							<span class="label">Normalized RGB:</span>
-							<span class="value mono"
-								>{Math.round(components.r * 255 / 31)}, {Math.round(components.g * 255 / 63)}, {Math.round(components.b * 255 / 31)}</span
-							>
-						</div>
-					</div>
-				</GroupBox>
-
-				<!-- Instruction Details -->
-				<GroupBox title="Instruction Details">
-					<div class="instruction-section">
-						{#if detail.isPatched !== undefined}
-							<div class="info-row">
-								<span class="label">Code Path:</span>
-								<span class="value" class:patched={detail.isPatched} class:unpatched={!detail.isPatched}>
-									{detail.isPatched ? 'PATCHED' : 'Unpatched'}
-								</span>
-							</div>
-						{/if}
-						{#if detail.movwAddress && detail.movwInstruction}
-							<div class="info-row">
-								<span class="label">MOVW Addr:</span>
-								<span class="value mono">{detail.movwAddress}</span>
-							</div>
-							<div class="info-row">
-								<span class="label">MOVW Instr:</span>
-								<span class="value mono">{detail.movwInstruction}</span>
-							</div>
-						{/if}
-						{#if detail.strhAddress && detail.strhInstruction}
-							<div class="info-row">
-								<span class="label">STRH Addr:</span>
-								<span class="value mono">{detail.strhAddress}</span>
-							</div>
-							<div class="info-row">
-								<span class="label">STRH Instr:</span>
-								<span class="value mono">{detail.strhInstruction}</span>
-							</div>
-						{/if}
-						{#if detail.address && detail.instruction && !detail.movwAddress}
-							<div class="info-row">
-								<span class="label">Address:</span>
-								<span class="value mono">{detail.address}</span>
-							</div>
-							<div class="info-row">
-								<span class="label">Instruction:</span>
-								<span class="value mono">{detail.instruction}</span>
-							</div>
-						{/if}
-						{#if detail.rawBytes && detail.rawBytes.length > 0}
-							<div class="info-row">
-								<span class="label">Raw Bytes:</span>
-								<span class="value mono">{formatBytes(detail.rawBytes)}</span>
-							</div>
-						{/if}
-					</div>
-				</GroupBox>
+				<TableView
+					headers={instructionHeaders}
+					rows={instructionRows}
+					height="96px"
+					width="100%"
+				/>
 
 				<!-- Buttons -->
 				<div class="button-row">
@@ -191,8 +195,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: 12px;
-		min-width: 400px;
-		max-width: 500px;
 	}
 
 	.preview-section {
@@ -202,21 +204,14 @@
 	}
 
 	.color-preview-large {
-		width: 80px;
-		height: 80px;
+		width: 64px;
+		height: 64px;
 		border: 2px solid #808080;
 		flex-shrink: 0;
 	}
 
 	.preview-info {
 		flex: 1;
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-
-	.technical-section,
-	.instruction-section {
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
@@ -236,28 +231,6 @@
 
 	.value {
 		color: #000000;
-	}
-
-	.value.mono,
-	.value.binary {
-		font-family: 'Courier New', monospace;
-		font-size: 11px;
-	}
-
-	.value.patched {
-		color: #008000;
-		font-weight: bold;
-	}
-
-	.value.unpatched {
-		color: #800000;
-	}
-
-	.separator {
-		height: 1px;
-		background-color: #c0c0c0;
-		border-top: 1px solid #ffffff;
-		margin: 4px 0;
 	}
 
 	.button-row {

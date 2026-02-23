@@ -88,3 +88,9 @@
 		</tbody>
 	</table>
 </div>
+
+<style>
+	table {
+		width: 100%;
+	}
+</style>

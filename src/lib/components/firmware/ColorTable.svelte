@@ -106,11 +106,6 @@
 		background-color: #ffffff;
 	}
 
-	:global(.color-table-container td.mono) {
-		font-family: 'Courier New', monospace;
-		font-size: 11px;
-	}
-
 	/* Color preview cell - need to inject it into the table cells */
 	:global(.color-table-container td:last-child) {
 		width: 50px;
