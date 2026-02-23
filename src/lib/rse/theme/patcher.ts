@@ -25,6 +25,7 @@ import {
 	PatchError,
 	ValidationError,
 	CapacityError,
+	CompatibilityError,
 	throwThemeError
 } from './errors.js';
 
@@ -158,7 +159,28 @@ export class ThemePatcher {
 			const analysis = this.analyze();
 
 			if (!analysis.canPatch) {
-				throw new PatchError('Firmware cannot be patched: theme functions or NOP slides not found');
+				// Determine why patching failed
+				const hasThemeFunctions = analysis.themeFunctions.length > 0;
+				const hasNopSlides = analysis.nopSlides.length > 0;
+
+				if (!hasThemeFunctions) {
+					throw new CompatibilityError(
+						'Unable to patch firmware: theme functions not found.\n\n' +
+						'This may be an older firmware version that does not support theme customization.\n' +
+						'Theme system support: V2.4.0 and later\n\n' +
+						'If you believe this is an error, please report it with your firmware version.'
+					);
+				}
+
+				if (!hasNopSlides) {
+					throw new CapacityError(
+						'Unable to patch firmware: no suitable space found for patch code.\n\n' +
+						'This firmware may have a different structure than expected.\n' +
+						'Please report this issue with your firmware version.'
+					);
+				}
+
+				throw new PatchError('Firmware cannot be patched: unknown reason');
 			}
 
 			// Check if already patched - if so, find existing NOP slide for re-patching
@@ -169,7 +191,11 @@ export class ThemePatcher {
 				console.error('[INFO] Firmware is already patched - attempting re-patch');
 				const existingNopSlide = this.findExistingNopSlide();
 				if (!existingNopSlide) {
-					throw new PatchError('Cannot re-patch: unable to locate existing NOP slide');
+					throw new PatchError(
+						'Cannot re-patch: unable to locate existing patch code.\n\n' +
+						'This may indicate a corrupted or incompatible patch.\n' +
+						'Please start with a clean original firmware file.'
+					);
 				}
 				nopSlide = existingNopSlide;
 				isRepatch = true;
