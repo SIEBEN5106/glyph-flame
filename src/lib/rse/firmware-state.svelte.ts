@@ -16,7 +16,7 @@ import { detectTofu } from "$lib/rse/utils/tofu-detector";
 import { imageToRgb565 } from "$lib/rse/utils/bitmap";
 import { UNICODE_RANGES } from "$lib/rse/utils/unicode-ranges";
 import { debugMode, debugAnimationComplete } from "$lib/stores";
-import { extractThemeColors } from "$lib/rse/theme";
+import { extractThemeColors, type ColorWrite } from "$lib/rse/theme";
 
 // Types
 export interface FontPlaneInfo {
@@ -331,33 +331,72 @@ export class FirmwareState {
 
       for (const func of result.themeFunctions) {
         if (func.type === 'menu' || func.uiElement.includes('Menu')) {
-          // Extract colors from colorWrites (these have full instruction details)
-          for (const write of func.colorWrites) {
-            // Format instructions like Python version: 0x3F894: MOVW R6, #0x2945
-            const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
-            const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+          // IMPORTANT: The simulator outputs ALL writes from ALL themes mixed together.
+          // We need to filter by write.themeCondition to get the correct writes for each theme.
+          // The extractor already simulates each theme separately, so func.colorWrites
+          // contains writes from themes 0,1,2,3,4 all in one array.
 
-            let movwAddr: string | undefined;
-            let movwInstr: string | undefined;
-            if (write.movwInstr) {
-              movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
-              movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+          // Group writes by their themeCondition
+          const writesByTheme: Map<number, ColorWrite[]> = new Map();
+          for (const write of func.colorWrites) {
+            const themeId = write.themeCondition ?? 0;
+            if (!writesByTheme.has(themeId)) {
+              writesByTheme.set(themeId, []);
+            }
+            writesByTheme.get(themeId)!.push(write);
+          }
+
+          // Now process each theme's writes separately
+          for (const [targetTheme, themeWrites] of writesByTheme) {
+            // Collect colors per theme, keeping only the LAST write to each register
+            const themeColors: Map<number, ColorEntry> = new Map();
+
+            for (const write of themeWrites) {
+              // Only collect writes to R1, R2, R3 (these are the main color registers)
+              if (write.targetReg !== 1 && write.targetReg !== 2 && write.targetReg !== 3) {
+                continue;
+              }
+
+              // Format instructions like Python version: 0x3F894: MOVW R6, #0x2945
+              const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+              const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+
+              let movwAddr: string | undefined;
+              let movwInstr: string | undefined;
+              if (write.movwInstr) {
+                movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
+                movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+              } else if (write.sourceReg === 12) {
+                // R12 indicates preloaded value
+                movwAddr = undefined;
+                movwInstr = '(preload)';
+              }
+
+              // Get semantic meaning from target register (R1=Highlight, R2=Secondary, R3=Foreground)
+              const registerMeaningKey = registerMeaning[write.targetReg] ?? `R${write.targetReg}`;
+
+              // Create color entry
+              const colorEntry: ColorEntry = {
+                semantic: registerMeaningKey,
+                color: write.colorValue,
+                themeId: targetTheme,
+                register: write.targetReg,
+                movwAddress: movwAddr,
+                movwInstruction: movwInstr,
+                strhAddress: strhAddr,
+                strhInstruction: strhInstr,
+                isPatched: false
+              };
+
+              // Store in map - later writes to same register overwrite earlier ones
+              // This gives us the FINAL color value for each register
+              themeColors.set(write.targetReg, colorEntry);
             }
 
-            // Get semantic meaning from target register (R1=Highlight, R2=Secondary, R3=Foreground)
-            const registerMeaningKey = registerMeaning[write.targetReg] ?? `R${write.targetReg}`;
-
-            menuColorEntries.push({
-              semantic: registerMeaningKey,  // Just the register meaning, no "Menu Text -" prefix
-              color: write.colorValue,
-              themeId: write.themeCondition ?? undefined,
-              register: write.targetReg,
-              movwAddress: movwAddr,
-              movwInstruction: movwInstr,
-              strhAddress: strhAddr,
-              strhInstruction: strhInstr,
-              isPatched: false // Color writes are from unpatched code path
-            });
+            // Add this theme's colors to the main array
+            for (const [, entry] of themeColors) {
+              menuColorEntries.push(entry);
+            }
           }
         }
 

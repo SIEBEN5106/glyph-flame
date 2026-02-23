@@ -43,7 +43,7 @@ export class ControlFlowSimulator {
 		let currentThemeCondition: number | null = null;
 
 		let addr = funcAddr;
-		const maxSteps = 200;
+		const maxSteps = 500;
 
 		for (let step = 0; step < maxSteps && addr < endAddr;) {
 			// Prevent infinite loops
@@ -99,7 +99,12 @@ export class ControlFlowSimulator {
 				itBlockRemaining = result.newItBlockRemaining;
 			}
 
-			addr += instrSize;
+			// Handle branch target
+			if (result.branchTo !== null) {
+				addr = result.branchTo;
+			} else {
+				addr += instrSize;
+			}
 			step++;
 		}
 
@@ -120,9 +125,10 @@ export class ControlFlowSimulator {
 		movwRecords: MovwRecord[],
 		lastCmpResult: boolean,
 		itConditions: boolean[]
-	): { newCmpResult: boolean | null; newItBlockRemaining: number | null } {
+	): { newCmpResult: boolean | null; newItBlockRemaining: number | null; branchTo: number | null } {
 		let newCmpResult: boolean | null = null;
 		let newItBlockRemaining: number | null = null;
+		let branchTo: number | null = null;
 
 		switch (instr.instrType) {
 			case InstructionType.PUSH:
@@ -152,11 +158,27 @@ export class ControlFlowSimulator {
 				break;
 
 			case InstructionType.BEQ:
+				// Branch if equal
+				if (lastCmpResult) {
+					branchTo = this.getBranchTarget(instr);
+				}
+				break;
+
 			case InstructionType.BNE:
+				// Branch if not equal
+				if (!lastCmpResult) {
+					branchTo = this.getBranchTarget(instr);
+				}
+				break;
+
 			case InstructionType.B:
+				// Unconditional branch
+				branchTo = this.getBranchTarget(instr);
+				break;
+
 			case InstructionType.CBZ:
 			case InstructionType.CBNZ:
-				// Branch and comparison instructions - not fully tracked
+				// Compare and branch on zero/non-zero - not fully tracked
 				break;
 
 			case InstructionType.IT:
@@ -169,7 +191,7 @@ export class ControlFlowSimulator {
 				break;
 		}
 
-		return { newCmpResult, newItBlockRemaining };
+		return { newCmpResult, newItBlockRemaining, branchTo };
 	}
 
 	/**
@@ -302,5 +324,13 @@ export class ControlFlowSimulator {
 		if (mask & 0x2) return 3;
 		if (mask & 0x4) return 2;
 		return 1;
+	}
+
+	/**
+	 * Calculate branch target address for branch instructions
+	 */
+	private getBranchTarget(instr: Instruction): number {
+		// The decoder already calculates the absolute branch target
+		return instr.branchTarget;
 	}
 }
