@@ -47,7 +47,7 @@
 			const colorHex = '0x' + entry.color.toString(16).padStart(4, '0').toUpperCase();
 			const themeDisplay = entry.themeId !== undefined ? `Theme ${entry.themeId}` : 'N/A';
 			const regDisplay = entry.register !== undefined ? `R${entry.register}` : 'N/A';
-			const sourceDisplay = entry.isPatched ? 'Patched' : 'Normal';
+			const sourceDisplay = entry.isPatched ? 'Patched' : 'Not Patched';
 			const colorCss = rgb565ToCss(entry.color);
 
 			const cells: TableCell[] = hideProperty
