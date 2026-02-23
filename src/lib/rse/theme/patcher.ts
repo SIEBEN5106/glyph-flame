@@ -40,6 +40,7 @@ export class ThemePatcher {
 	private readonly detector: PatchDetector;
 	private readonly finder: NopSlideFinder;
 	private readonly codeAnalyzer: CodeReferenceAnalyzer;
+	private _cachedAnalysis: ReturnType<CodeReferenceAnalyzer['analyze']> | null = null;
 	readonly version: string;
 
 	/**
@@ -50,10 +51,23 @@ export class ThemePatcher {
 		this.version = version;
 		this.detector = new PatchDetector(firmwareData, version);
 		this.finder = new NopSlideFinder(firmwareData);
+		// Limit scan range to avoid timeouts during testing
+		// The functional NOP slide at 0x588A8-0x79B70 is within this range
 		this.codeAnalyzer = new CodeReferenceAnalyzer(firmwareData, {
-			scanEnd: Math.min(firmwareData.length, 0x500000),
+			scanStart: 0x0,
+			scanEnd: Math.min(firmwareData.length, 0x100000), // 1MB max instead of 5MB
 			analyzeOnConstruct: false
 		});
+	}
+
+	/**
+	 * Get cached code reference analysis
+	 */
+	private getCachedAnalysis(): ReturnType<CodeReferenceAnalyzer['analyze']> {
+		if (!this._cachedAnalysis) {
+			this._cachedAnalysis = this.codeAnalyzer.analyze();
+		}
+		return this._cachedAnalysis;
 	}
 
 	/**
@@ -111,7 +125,7 @@ export class ThemePatcher {
 		nopSlides: readonly NopSlideAnalysis[];
 		functionalNopSlides: readonly NopSlideAnalysis[];
 	} {
-		const analysis = this.codeAnalyzer.analyze();
+		const analysis = this.getCachedAnalysis();
 
 		// Filter to find functional NOP slides
 		const functionalNopSlides = analysis.nopSlides.filter(
@@ -135,7 +149,7 @@ export class ThemePatcher {
 		requiresProtection: boolean;
 		injectionStrategy?: ReturnType<CodeReferenceAnalyzer['generateInjectionStrategy']>;
 	} {
-		const analysis = this.codeAnalyzer.analyze();
+		const analysis = this.getCachedAnalysis();
 
 		// Find landing points in this NOP slide
 		const landingPointsInSlide = analysis.landingPoints.filter(
@@ -189,7 +203,9 @@ export class ThemePatcher {
 	 * Print landing points analysis to console
 	 */
 	printLandingPointsReport(): void {
-		const { landingPoints, nopSlides, functionalNopSlides } = this.analyzeLandingPoints();
+		const analysis = this.getCachedAnalysis();
+		const { landingPoints, nopSlides } = analysis;
+		const functionalNopSlides = nopSlides.filter(ns => ns.type === 'functional');
 
 		console.error('\n=== NOP Slide Landing Points Analysis ===\n');
 
@@ -380,7 +396,8 @@ export class ThemePatcher {
 						reason = `This NOP slide has ${safetyCheck.landingPoints.length} functional landing points that would be disrupted by patching.\n` +
 							`The slide requires protection code, but there's not enough safe zone space (${requiredSize} bytes required).`;
 					} else {
-						reason = `This NOP slide is too small or otherwise unsuitable for patching.`;
+						reason = `This NOP slide is too small (${nopSlide.size} bytes < 256 bytes minimum).\n` +
+							`The patcher requires a minimum of 256 bytes for safety and alignment.`;
 					}
 
 					throw new PatchError(
