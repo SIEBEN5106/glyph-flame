@@ -6,6 +6,7 @@
 		content: string;
 		class?: ClassValue;
 		style?: string;
+		colspan?: number;
 	}
 
 	export interface TableRow {
@@ -81,7 +82,7 @@
 					ondblclick={() => row.key && handleRowDoubleClick(row.key)}
 				>
 					{#each row.cells as cell}
-						<td class={cell.class} style={cell.style}>{cell.content}</td>
+						<td class={cell.class} style={cell.style} colspan={cell.colspan}>{cell.content}</td>
 					{/each}
 				</tr>
 			{/each}

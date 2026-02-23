@@ -37,11 +37,16 @@ export interface BitmapFileInfo {
   offset?: number;
 }
 
+export interface ColorNodeData {
+  themeId?: number;
+  parentType?: 'menu' | 'flac';
+}
+
 export interface TreeNode {
   id: string;
   label: string;
   type: "folder" | "font-type" | "plane" | "image" | "colors";
-  data?: FontPlaneInfo | BitmapFileInfo;
+  data?: FontPlaneInfo | BitmapFileInfo | ColorNodeData;
   children?: TreeNode[];
 }
 
@@ -343,7 +348,7 @@ export class FirmwareState {
             const registerMeaningKey = registerMeaning[write.targetReg] ?? `R${write.targetReg}`;
 
             menuColorEntries.push({
-              semantic: `Menu Text - ${registerMeaningKey}`,
+              semantic: registerMeaningKey,  // Just the register meaning, no "Menu Text -" prefix
               color: write.colorValue,
               themeId: write.themeCondition ?? undefined,
               register: write.targetReg,
@@ -433,22 +438,36 @@ export class FirmwareState {
         flacColors: uniqueFlacColors
       };
 
-      // Build color tree node (only Menu and FLAC colors exist in firmware)
-      const menuColorNode = {
+      // Build color tree node with theme sub-nodes for Menu colors
+      // Create 5 theme sub-nodes for Menu colors (Theme 0-4)
+      const menuThemeNodes: TreeNode[] = [];
+      for (let themeId = 0; themeId < 5; themeId++) {
+        const nodeData: ColorNodeData = { themeId, parentType: 'menu' };
+        menuThemeNodes.push({
+          id: `colors-menu-theme-${themeId}`,
+          label: `Theme ${themeId}`,
+          type: 'colors' as const,
+          data: nodeData
+        });
+      }
+
+      const menuColorNode: TreeNode = {
         id: 'colors-menu',
         label: 'General Text Colors',
-        type: 'colors' as const,
-        children: []
+        type: 'folder' as const,
+        children: menuThemeNodes
       };
 
-      const flacColorNode = {
+      // FLAC colors remain as a single node (no theme sub-groups)
+      const flacNodeData: ColorNodeData = { parentType: 'flac' };
+      const flacColorNode: TreeNode = {
         id: 'colors-flac',
         label: 'Codec Information Color',
         type: 'colors' as const,
-        children: []
+        data: flacNodeData
       };
 
-      const colorsNode = {
+      const colorsNode: TreeNode = {
         id: 'colors',
         label: 'Colors',
         type: 'folder' as const,

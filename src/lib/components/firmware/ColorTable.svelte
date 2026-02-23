@@ -28,13 +28,18 @@
 		title?: string;
 		onDoubleClick?: (entry: ColorEntry) => void;
 		height?: string;
+		hideProperty?: boolean;
 	}
 
-	let { entries, title = 'Colors', onDoubleClick, height = '300px' }: Props = $props();
+	let { entries, title = 'Colors', onDoubleClick, height = '300px', hideProperty = false }: Props = $props();
 
 	let selectedKey = $state<string | null>(null);
 
-	const headers = ['Property', 'Theme', 'Register', 'Source', 'Color Value', 'Preview'];
+	const headers = $derived(() =>
+		hideProperty
+			? ['Theme', 'Register', 'Source', 'Color Value', 'Preview']
+			: ['Property', 'Theme', 'Register', 'Source', 'Color Value', 'Preview']
+	);
 
 	// Convert to table rows
 	const rows = $derived.by(() => {
@@ -45,14 +50,22 @@
 			const sourceDisplay = entry.isPatched ? 'Patched' : 'Normal';
 			const colorCss = rgb565ToCss(entry.color);
 
-			const cells: TableCell[] = [
-				{ content: entry.semantic },
-				{ content: themeDisplay },
-				{ content: regDisplay },
-				{ content: sourceDisplay },
-				{ content: colorHex, class: 'mono' },
-				{ content: '', class: 'color-preview', style: `--color-bg: ${colorCss}` }
-			];
+			const cells: TableCell[] = hideProperty
+				? [
+						{ content: themeDisplay },
+						{ content: regDisplay },
+						{ content: sourceDisplay },
+						{ content: colorHex, class: 'mono' },
+						{ content: '', class: 'color-preview', style: `--color-bg: ${colorCss}` }
+				  ]
+				: [
+						{ content: entry.semantic },
+						{ content: themeDisplay },
+						{ content: regDisplay },
+						{ content: sourceDisplay },
+						{ content: colorHex, class: 'mono' },
+						{ content: '', class: 'color-preview', style: `--color-bg: ${colorCss}` }
+				  ];
 
 			return {
 				key: `${entry.semantic}-${entry.themeId ?? 0}-${entry.register ?? 0}-${idx}`,
@@ -77,7 +90,7 @@
 
 <div class="color-table-container">
 	<TableView
-		{headers}
+		headers={headers()}
 		{rows}
 		interactive={true}
 		bind:selectedRow={selectedKey}
@@ -108,6 +121,19 @@
 		top: 0;
 		z-index: 10;
 		background-color: #ffffff;
+	}
+
+	/* Theme header row styling */
+	:global(.color-table-container .theme-header-row) {
+		background-color: #c0c0c0;
+	}
+
+	:global(.color-table-container .theme-header-row td) {
+		font-weight: bold;
+		text-align: center;
+		padding: 4px;
+		background-color: #c0c0c0;
+		color: #000000;
 	}
 
 	/* Color preview cell - need to inject it into the table cells */

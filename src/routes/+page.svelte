@@ -310,8 +310,22 @@
                         entries={fwState.colorData.flacColors}
                         title="Codec Information Color (FLAC String)"
                         height="100%"
+                        hideProperty={true}
                         onDoubleClick={(entry) => fwState.openColorDetail(entry)}
                       />
+                    {:else if fwState.selectedNode.label.startsWith('Theme')}
+                      {@const selectedTheme = (fwState.selectedNode.data && 'themeId' in fwState.selectedNode.data) ? fwState.selectedNode.data.themeId : undefined}
+                      {@const themeColors = fwState.colorData.menuColors.filter(c => c.themeId === selectedTheme)}
+                      {#if themeColors.length > 0}
+                        <ColorTable
+                          entries={themeColors}
+                          title="Theme Colors"
+                          height="100%"
+                          onDoubleClick={(entry) => fwState.openColorDetail(entry)}
+                        />
+                      {:else}
+                        <div class="empty-state"><p>No colors found for this theme</p></div>
+                      {/if}
                     {:else}
                       <ColorTable
                         entries={[...fwState.colorData.menuColors, ...fwState.colorData.flacColors]}
