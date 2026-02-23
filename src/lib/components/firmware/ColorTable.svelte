@@ -34,26 +34,22 @@
 
 	let selectedKey = $state<string | null>(null);
 
-	const headers = ['Property', 'Theme', 'Register', 'Color Value', 'Preview'];
-
-	// Debug logging
-	$effect(() => {
-		console.log('[ColorTable] entries changed:', entries.length, entries);
-	});
+	const headers = ['Property', 'Theme', 'Register', 'Source', 'Color Value', 'Preview'];
 
 	// Convert to table rows
 	const rows = $derived.by(() => {
-		console.log('[ColorTable] Computing rows from entries:', entries.length);
 		const result = entries.map((entry, idx) => {
 			const colorHex = '0x' + entry.color.toString(16).padStart(4, '0').toUpperCase();
 			const themeDisplay = entry.themeId !== undefined ? `Theme ${entry.themeId}` : 'N/A';
 			const regDisplay = entry.register !== undefined ? `R${entry.register}` : 'N/A';
+			const sourceDisplay = entry.isPatched ? 'Patched' : 'Normal';
 			const colorCss = rgb565ToCss(entry.color);
 
 			const cells: TableCell[] = [
 				{ content: entry.semantic },
 				{ content: themeDisplay },
 				{ content: regDisplay },
+				{ content: sourceDisplay },
 				{ content: colorHex, class: 'mono' },
 				{ content: '', class: 'color-preview', style: `--color-bg: ${colorCss}` }
 			];
@@ -64,7 +60,6 @@
 				extra: entry
 			} as TableRow & { extra: ColorEntry };
 		});
-		console.log('[ColorTable] Computed rows:', result.length);
 		return result;
 	});
 
@@ -104,6 +99,15 @@
 	:global(.color-table-container .sunken-panel) {
 		border: 2px inset #c0c0c0;
 		background-color: #ffffff;
+		overflow-y: auto;
+	}
+
+	/* Ensure table header stays on top */
+	:global(.color-table-container thead) {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		background-color: #ffffff;
 	}
 
 	/* Color preview cell - need to inject it into the table cells */
@@ -111,7 +115,6 @@
 		width: 50px;
 		padding: 2px !important;
 		text-align: center;
-		position: relative;
 	}
 
 	/* Color preview using CSS variable */

@@ -300,45 +300,19 @@ export class FirmwareState {
     if (!this.firmwareData) return;
 
     try {
-      console.log('[buildColorTree] Starting color extraction...');
-      console.log('[buildColorTree] Firmware size:', this.firmwareData.length);
-
       const result = extractThemeColors(this.firmwareData);
-      console.log('[buildColorTree] Extraction result:', {
-        themeFunctions: result.themeFunctions.length,
-        canPatch: result.canPatch,
-        hasColors: result.colors.size > 0,
-        colorsSize: result.colors.size,
-        themeFunctionsList: result.themeFunctions.map(f => ({ addr: '0x' + f.addr.toString(16), type: f.type, uiElement: f.uiElement }))
-      });
 
       if (result.themeFunctions.length === 0) {
-        console.warn('[buildColorTree] No theme functions found');
         return;
       }
 
       if (!result.canPatch) {
-        console.warn('[buildColorTree] Firmware cannot be patched');
         return;
       }
 
       // Extract Menu colors (R0-R14 typically)
       const menuColorEntries: ColorEntry[] = [];
       const flacColorEntries: ColorEntry[] = [];
-
-      console.log('[buildColorTree] Analyzing theme functions:');
-      for (const func of result.themeFunctions) {
-        console.log('[buildColorTree] Function:', {
-          addr: '0x' + func.addr.toString(16),
-          type: func.type,
-          uiElement: func.uiElement,
-          patternType: func.patternType,
-          colorWritesCount: func.colorWrites.length,
-          preloadColorsKeys: Object.keys(func.preloadColors).length,
-          colorWrites: func.colorWrites.slice(0, 3), // First 3 for inspection
-          preloadColors: func.preloadColors
-        });
-      }
 
       // Register meaning mapping based on Python implementation
       // R1: Highlight/Foreground color
@@ -450,11 +424,6 @@ export class FirmwareState {
         }
       }
 
-      console.log('[buildColorTree] Extracted colors from colorWrites:', {
-        menuEntries: menuColorEntries.length,
-        flacEntries: flacColorEntries.length
-      });
-
       // Remove duplicates
       const uniqueMenuColors = this.deduplicateColors(menuColorEntries);
       const uniqueFlacColors = this.deduplicateColors(flacColorEntries);
@@ -463,11 +432,6 @@ export class FirmwareState {
         menuColors: uniqueMenuColors,
         flacColors: uniqueFlacColors
       };
-
-      console.log('[buildColorTree] Final colors:', {
-        menu: uniqueMenuColors.length,
-        flac: uniqueFlacColors.length
-      });
 
       // Build color tree node (only Menu and FLAC colors exist in firmware)
       const menuColorNode = {
@@ -493,9 +457,7 @@ export class FirmwareState {
 
       // Add to tree nodes
       this.treeNodes = [...this.treeNodes, colorsNode];
-      console.log('[buildColorTree] Colors node added. Total tree nodes:', this.treeNodes.length);
     } catch (error) {
-      console.error('[buildColorTree] Failed to build color tree:', error);
       // Don't add Colors node if extraction fails
     }
   }
@@ -514,7 +476,6 @@ export class FirmwareState {
   handleNodeClick(node: TreeNode) {
     if (this.isProcessing) return;
 
-    console.log('[handleNodeClick] Clicked node:', node.id, node.label, node.type);
     this.planeData = null;
     this.imageData = null;
     this.selectedNode = node;
@@ -529,10 +490,6 @@ export class FirmwareState {
       }
       this.loadImage(image);
     } else if (node.type === "colors") {
-      // Color selection - colorData is already populated
-      console.log('[handleNodeClick] Colors node selected, colorData:', this.colorData);
-      console.log('[handleNodeClick] menuColors count:', this.colorData?.menuColors?.length ?? 0);
-      console.log('[handleNodeClick] flacColors count:', this.colorData?.flacColors?.length ?? 0);
       this.statusMessage = `Viewing ${node.label}`;
     }
   }
@@ -988,7 +945,6 @@ export class FirmwareState {
     try {
       this.worker!.postMessage(messageData);
     } catch (err) {
-      console.error("[performFontReplacement] postMessage error:", err);
       throw err;
     }
     await resultPromise;
