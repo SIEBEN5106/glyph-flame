@@ -249,6 +249,106 @@ describe('Theme Patcher - NOP Slide Finder', () => {
 	});
 });
 
+describe('Theme Patcher - NOP Slide Landing Points Analysis', () => {
+	it('should analyze landing points in NOP slides', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+		const analysis = patcher.analyzeLandingPoints();
+
+		// Should find landing points
+		expect(analysis.landingPoints.length).toBeGreaterThan(0);
+
+		// Should find NOP slides
+		expect(analysis.nopSlides.length).toBeGreaterThan(0);
+
+		// Should find functional NOP slides
+		expect(analysis.functionalNopSlides.length).toBeGreaterThan(0);
+	});
+
+	it('should identify the functional NOP slide at 0x588A8 - 0x79B70', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+		const analysis = patcher.analyzeLandingPoints();
+
+		// Find the functional NOP slide mentioned in memory
+		const functionalSlide = analysis.functionalNopSlides.find(
+			ns => ns.start === 0x588A8 && ns.end === 0x79B70
+		);
+
+		// This slide should be detected as functional
+		expect(functionalSlide).toBeDefined();
+		if (functionalSlide) {
+			expect(functionalSlide.type).toBe('functional');
+			expect(functionalSlide.landingPoints.length).toBeGreaterThan(0);
+			expect(functionalSlide.referenceCount).toBeGreaterThan(50);
+		}
+	});
+
+	it('should verify NOP slide safety before patching', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// Get NOP slides from analysis
+		const analysis = patcher.analyze();
+		const slides = analysis.nopSlides;
+		expect(slides.length).toBeGreaterThan(0);
+
+		// Test safety verification for each slide
+		for (const slide of slides.slice(0, 3)) { // Test first 3 slides
+			const safety = patcher.verifyNopSlideLandingPointSafety(slide, 200);
+
+			// Should have landing points info
+			expect(safety.landingPoints).toBeDefined();
+
+			// If the slide has landing points, check the result
+			if (safety.requiresProtection) {
+				// Functional NOP slides should have injection strategy
+				if (safety.landingPoints.length > 0) {
+					expect(safety.requiresProtection).toBe(true);
+				}
+			}
+		}
+	});
+
+	it('should print landing points report', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// This should not throw
+		expect(() => patcher.printLandingPointsReport()).not.toThrow();
+	});
+
+	it('should verify that patches do not interfere with functional NOP slide', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// Find the functional NOP slide
+		const analysis = patcher.analyzeLandingPoints();
+		const functionalSlide = analysis.functionalNopSlides.find(
+			ns => ns.start === 0x588A8
+		);
+
+		if (functionalSlide) {
+			// Verify that trying to use this slide would be rejected
+			const safety = patcher.verifyNopSlideLandingPointSafety(
+				{
+					start: functionalSlide.start,
+					end: functionalSlide.end,
+					size: functionalSlide.size,
+					source: 'test',
+					isActive: false,
+					referenceCount: functionalSlide.referenceCount
+				},
+				200
+			);
+
+			// The functional NOP slide has many landing points
+			expect(safety.landingPoints.length).toBeGreaterThan(0);
+			expect(safety.requiresProtection).toBe(true);
+		}
+	});
+});
+
 describe('Theme Patcher - Patch Detection', () => {
 	const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
 

@@ -8,6 +8,7 @@
 import { encodeBl, encodeMovw, encodeMovt } from './thumb/encoders.js';
 import { fileIO } from '../utils/file-io.js';
 import { NopSlideFinder } from './nop-slide.js';
+import { CodeReferenceAnalyzer, type LandingPoint, type NopSlideAnalysis } from './code-reference-analyzer.js';
 import { PatchDetector } from './detector.js';
 import { createPatchMetadata, writePatchMetadata } from './metadata.js';
 import { discoverFlacFunction, discoverMenuFunction, findFunctionStart, discoverPatchesBySignature } from './discovery.js';
@@ -38,6 +39,7 @@ export class ThemePatcher {
 	private readonly data: Uint8Array;
 	private readonly detector: PatchDetector;
 	private readonly finder: NopSlideFinder;
+	private readonly codeAnalyzer: CodeReferenceAnalyzer;
 	readonly version: string;
 
 	/**
@@ -48,6 +50,10 @@ export class ThemePatcher {
 		this.version = version;
 		this.detector = new PatchDetector(firmwareData, version);
 		this.finder = new NopSlideFinder(firmwareData);
+		this.codeAnalyzer = new CodeReferenceAnalyzer(firmwareData, {
+			scanEnd: Math.min(firmwareData.length, 0x500000),
+			analyzeOnConstruct: false
+		});
 	}
 
 	/**
@@ -94,6 +100,131 @@ export class ThemePatcher {
 			canPatch: themeFunctions.length > 0 && nopSlides.length > 0,
 			patchStatus
 		};
+	}
+
+	/**
+	 * Analyze NOP slide landing points
+	 * Returns detailed analysis of landing points in NOP slides
+	 */
+	analyzeLandingPoints(): {
+		landingPoints: readonly LandingPoint[];
+		nopSlides: readonly NopSlideAnalysis[];
+		functionalNopSlides: readonly NopSlideAnalysis[];
+	} {
+		const analysis = this.codeAnalyzer.analyze();
+
+		// Filter to find functional NOP slides
+		const functionalNopSlides = analysis.nopSlides.filter(
+			ns => ns.type === 'functional'
+		);
+
+		return {
+			landingPoints: analysis.landingPoints,
+			nopSlides: analysis.nopSlides,
+			functionalNopSlides
+		};
+	}
+
+	/**
+	 * Verify that a NOP slide is safe to use for patching
+	 * Checks that the slide doesn't interfere with landing points
+	 */
+	verifyNopSlideLandingPointSafety(nopSlide: NopSlide, requiredSize: number): {
+		isSafe: boolean;
+		landingPoints: readonly LandingPoint[];
+		requiresProtection: boolean;
+		injectionStrategy?: ReturnType<CodeReferenceAnalyzer['generateInjectionStrategy']>;
+	} {
+		const analysis = this.codeAnalyzer.analyze();
+
+		// Find landing points in this NOP slide
+		const landingPointsInSlide = analysis.landingPoints.filter(
+			lp => lp.inNopSlide &&
+				lp.nopSlideStart === nopSlide.start
+		);
+
+		const requiresProtection = landingPointsInSlide.length > 0;
+
+		// Find the NOP slide analysis for this slide
+		const nopSlideAnalysis = analysis.nopSlides.find(
+			ns => ns.start === nopSlide.start
+		);
+
+		if (!nopSlideAnalysis) {
+			// No detailed analysis available - use basic safety check
+			return {
+				isSafe: landingPointsInSlide.length === 0,
+				landingPoints: landingPointsInSlide,
+				requiresProtection
+			};
+		}
+
+		// Check if we can safely inject
+		if (!nopSlideAnalysis.canInjectSafely) {
+			return {
+				isSafe: false,
+				landingPoints: landingPointsInSlide,
+				requiresProtection: false
+			};
+		}
+
+		// Generate injection strategy if protection is required
+		let injectionStrategy: ReturnType<CodeReferenceAnalyzer['generateInjectionStrategy']> = null;
+		if (requiresProtection && nopSlideAnalysis.safeZoneSize && nopSlideAnalysis.safeZoneSize >= requiredSize) {
+			injectionStrategy = this.codeAnalyzer.generateInjectionStrategy(
+				nopSlideAnalysis,
+				requiredSize
+			);
+		}
+
+		return {
+			isSafe: injectionStrategy !== null || !requiresProtection,
+			landingPoints: landingPointsInSlide,
+			requiresProtection,
+			injectionStrategy: injectionStrategy ?? undefined
+		};
+	}
+
+	/**
+	 * Print landing points analysis to console
+	 */
+	printLandingPointsReport(): void {
+		const { landingPoints, nopSlides, functionalNopSlides } = this.analyzeLandingPoints();
+
+		console.error('\n=== NOP Slide Landing Points Analysis ===\n');
+
+		// Print functional NOP slides
+		console.error(`Functional NOP Slides: ${functionalNopSlides.length}`);
+		for (const slide of functionalNopSlides) {
+			console.error(`  0x${slide.start.toString(16)} - 0x${slide.end.toString(16)} (${slide.size} bytes)`);
+			console.error(`    Landing Points: ${slide.landingPoints.length}`);
+			console.error(`    Total References: ${slide.referenceCount}`);
+			console.error(`    Can Inject Safely: ${slide.canInjectSafely}`);
+			if (slide.protectionRequired) {
+				console.error(`    ⚠️  Protection Required: ${slide.landingPoints.length} landing points`);
+			}
+			if (slide.safeZoneSize !== undefined) {
+				console.error(`    Safe Zone Size: ${slide.safeZoneSize} bytes`);
+			}
+		}
+
+		// Print landing points
+		console.error(`\nTotal Landing Points: ${landingPoints.length}`);
+		const nopLandingPoints = landingPoints.filter(lp => lp.inNopSlide);
+		console.error(`Landing Points in NOP Slides: ${nopLandingPoints.length}`);
+
+		if (nopLandingPoints.length > 0) {
+			console.error('\nLanding Points Details:');
+			for (const lp of nopLandingPoints.slice(0, 20)) { // Limit output
+				console.error(`  0x${lp.addr.toString(16).padStart(5, '0')}: ${lp.referenceCount} references ` +
+					`(slide: 0x${lp.nopSlideStart?.toString(16) || 'N/A'})`);
+			}
+			if (nopLandingPoints.length > 20) {
+				console.error(`  ... and ${nopLandingPoints.length - 20} more`);
+			}
+		}
+
+		console.error('');
 	}
 
 	/**
@@ -235,6 +366,42 @@ export class ThemePatcher {
 				// DEBUG: Log selected NOP slide details
 				console.error(`[DEBUG] Selected NOP slide: 0x${nopSlide.start.toString(16)} - 0x${nopSlide.end.toString(16)} (${nopSlide.size} bytes)`);
 				console.error(`[DEBUG] Required size: ${requiredSize} bytes`);
+
+				// CRITICAL: Verify NOP slide landing point safety
+				const safetyCheck = this.verifyNopSlideLandingPointSafety(nopSlide, requiredSize);
+
+				if (!safetyCheck.isSafe) {
+					// Print landing points report for debugging
+					this.printLandingPointsReport();
+
+					// Build appropriate error message based on why the slide is unsafe
+					let reason = '';
+					if (safetyCheck.landingPoints.length > 0 && safetyCheck.requiresProtection) {
+						reason = `This NOP slide has ${safetyCheck.landingPoints.length} functional landing points that would be disrupted by patching.\n` +
+							`The slide requires protection code, but there's not enough safe zone space (${requiredSize} bytes required).`;
+					} else {
+						reason = `This NOP slide is too small or otherwise unsuitable for patching.`;
+					}
+
+					throw new PatchError(
+						`Selected NOP slide is not safe for patching:\n` +
+						`  Slide: 0x${nopSlide.start.toString(16)} - 0x${nopSlide.end.toString(16)} (${nopSlide.size} bytes)\n` +
+						`  Landing Points: ${safetyCheck.landingPoints.length}\n` +
+						`  Required Size: ${requiredSize} bytes\n` +
+						`  Requires Protection: ${safetyCheck.requiresProtection}\n\n` +
+						reason +
+						`\n\nPlease report this issue with your firmware version.`
+					);
+				}
+
+				if (safetyCheck.requiresProtection) {
+					console.error(`[INFO] NOP slide has ${safetyCheck.landingPoints.length} landing points - using protection strategy`);
+					if (safetyCheck.injectionStrategy) {
+						console.error(`[INFO] Injection strategy: entry protection at 0x${safetyCheck.injectionStrategy.entryProtectionAddr.toString(16)}, ` +
+							`code at 0x${safetyCheck.injectionStrategy.injectionAddr.toString(16)}, ` +
+							`exit protection at 0x${safetyCheck.injectionStrategy.exitProtectionAddr.toString(16)}`);
+					}
+				}
 			}
 
 			// Create patch data (skip safety check for re-patch)
@@ -545,4 +712,5 @@ export function patchFirmware(
 
 // Re-export types and functions for convenience
 export type { NopSlide, PatchMetadata, PatchPoint, PatchResult, PatchPointInfo, PatchAnalysisResult, PatchInfo };
-export { NopSlideFinder, PatchDetector };
+export type { LandingPoint, NopSlideAnalysis };
+export { NopSlideFinder, PatchDetector, CodeReferenceAnalyzer };
