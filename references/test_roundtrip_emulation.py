@@ -169,7 +169,7 @@ def round_trip_test_flac(firmware: bytes, patch_addr: int, firmware_name: str) -
 
 
 def test_menu_colors_static(firmware: bytes, firmware_name: str) -> dict:
-	"""Test Menu colors by static verification (search for MOVW instructions)"""
+	"""Test Menu colors by static verification (search for MOVW/MOVS instructions)"""
 	print(f"\n  Testing Menu colors (static verification)")
 
 	# Flatten the expected colors into a set for easier lookup
@@ -179,23 +179,46 @@ def test_menu_colors_static(firmware: bytes, firmware_name: str) -> dict:
 
 	# Search for MOVW instructions with expected colors
 	found_colors = {}
+	zero_found = False  # Track if we found MOVS Rd, #0 for 0x0000
 	search_start = 0x30000
 	search_end = min(0x50000, len(firmware) - 4)
 
 	for addr in range(search_start, search_end - 3, 2):
 		hw1 = firmware[addr] | (firmware[addr + 1] << 8)
-		if (hw1 & 0xFB00) == 0xF200:  # MOVW
-			hw2 = firmware[addr + 2] | (firmware[addr + 3] << 8)
-			i = (hw1 >> 10) & 1
-			imm4 = hw1 & 0xF
-			imm3 = (hw2 >> 12) & 0x7
-			imm8 = hw2 & 0xFF
-			imm16 = (imm4 << 12) | (i << 11) | (imm3 << 8) | imm8
 
-			if imm16 in expected_colors:
-				if imm16 not in found_colors:
-					found_colors[imm16] = []
-				found_colors[imm16].append(addr)
+		# Check for MOVW (32-bit instruction)
+		if (hw1 & 0xF800) == 0xF000:
+			hw2 = firmware[addr + 2] | (firmware[addr + 3] << 8)
+			opcode = (hw1 >> 4) & 0xF
+
+			if opcode == 0x4:  # MOVW
+				i = (hw1 >> 10) & 1
+				imm4 = hw1 & 0xF
+				imm3 = (hw2 >> 12) & 0x7
+				imm8 = hw2 & 0xFF
+				imm16 = (imm4 << 12) | (i << 11) | (imm3 << 8) | imm8
+
+				if imm16 in expected_colors:
+					if imm16 not in found_colors:
+						found_colors[imm16] = []
+					found_colors[imm16].append(addr)
+
+		# Check for MOVS Rd, #0 (16-bit instruction) for black color
+		# MOVS Rd, #0: 0x2000-0x27FF (R0-R7) or 0x2800-0x2FFF (R0-R7, different encoding)
+		if (hw1 & 0xF800) == 0x2000 or (hw1 & 0xF800) == 0x2800:
+			imm8 = hw1 & 0xFF
+			if imm8 == 0 and 0x0000 in expected_colors:
+				zero_found = True
+				if 0x0000 not in found_colors:
+					found_colors[0x0000] = []
+				found_colors[0x0000].append(addr)
+				# Only count a few instances to avoid spam
+				if len(found_colors[0x0000]) >= 3:
+					continue
+
+	# Add zero to found colors if we detected MOVS Rd, #0 instructions
+	if zero_found and 0x0000 not in found_colors:
+		found_colors[0x0000] = [addr]  # Use the last found address
 
 	# Verify all expected colors are found
 	results = {}
