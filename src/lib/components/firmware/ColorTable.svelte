@@ -29,17 +29,23 @@
 		onDoubleClick?: (entry: ColorEntry) => void;
 		height?: string;
 		hideProperty?: boolean;
+		hideSource?: boolean;
 	}
 
-	let { entries, title = 'Colors', onDoubleClick, height = '300px', hideProperty = false }: Props = $props();
+	let { entries, title = 'Colors', onDoubleClick, height = '300px', hideProperty = false, hideSource = false }: Props = $props();
 
 	let selectedKey = $state<string | null>(null);
 
-	const headers = $derived(() =>
-		hideProperty
-			? ['Theme', 'Register', 'Source', 'Color Value', 'Preview']
-			: ['Property', 'Theme', 'Register', 'Source', 'Color Value', 'Preview']
-	);
+	const headers = $derived(() => {
+		const h = [];
+		if (!hideProperty) h.push('Property');
+		h.push('Theme');
+		h.push('Register');
+		if (!hideSource) h.push('Source');
+		h.push('Color Value');
+		h.push('Preview');
+		return h;
+	});
 
 	// Convert to table rows
 	const rows = $derived.by(() => {
@@ -50,22 +56,19 @@
 			const sourceDisplay = entry.isPatched ? 'Patched' : 'Not Patched';
 			const colorCss = rgb565ToCss(entry.color);
 
-			const cells: TableCell[] = hideProperty
-				? [
-						{ content: themeDisplay },
-						{ content: regDisplay },
-						{ content: sourceDisplay },
-						{ content: colorHex, class: 'mono' },
-						{ content: '', class: 'color-preview', style: `--color-bg: ${colorCss}` }
-				  ]
-				: [
-						{ content: entry.semantic },
-						{ content: themeDisplay },
-						{ content: regDisplay },
-						{ content: sourceDisplay },
-						{ content: colorHex, class: 'mono' },
-						{ content: '', class: 'color-preview', style: `--color-bg: ${colorCss}` }
-				  ];
+			const cells: TableCell[] = [];
+
+			// Add columns based on visibility
+			if (!hideProperty) {
+				cells.push({ content: entry.semantic });
+			}
+			cells.push({ content: themeDisplay });
+			cells.push({ content: regDisplay });
+			if (!hideSource) {
+				cells.push({ content: sourceDisplay });
+			}
+			cells.push({ content: colorHex, class: 'mono' });
+			cells.push({ content: '', class: 'color-preview', style: `--color-bg: ${colorCss}` });
 
 			return {
 				key: `${entry.semantic}-${entry.themeId ?? 0}-${entry.register ?? 0}-${idx}`,

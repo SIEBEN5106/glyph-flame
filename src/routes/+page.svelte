@@ -319,6 +319,7 @@
                         title="Progress Bar Background Color"
                         height="100%"
                         hideProperty={true}
+                        hideSource={true}
                         onDoubleClick={(entry) => fwState.openColorDetail(entry)}
                       />
                     {:else if fwState.selectedNode.label.includes('Marquee') || fwState.selectedNode.id === 'colors-marquee'}
@@ -327,6 +328,7 @@
                         title="Marquee Overlay Color"
                         height="100%"
                         hideProperty={true}
+                        hideSource={true}
                         onDoubleClick={(entry) => fwState.openColorDetail(entry)}
                       />
                     {:else if fwState.selectedNode.label.startsWith('Theme')}
