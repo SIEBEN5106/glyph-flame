@@ -74,12 +74,14 @@ export class ThemeColorExtractor {
 				// For FLAC and Menu (ite/preload_store patterns), simulate all themes
 				const simulator = new ControlFlowSimulator(this.decoder);
 				const allColorWrites: ColorWrite[] = [];
+				const themeRegister = func.themeRegister ?? 0; // Default to R0
 
 				for (let themeId = 0; themeId < 5; themeId++) {
 					const [, colorWrites] = simulator.simulate(
 						func.addr,
 						func.endAddr || func.addr + 500,
-						themeId
+						themeId,
+						themeRegister
 					);
 
 					// Add all colorWrites from this theme simulation
@@ -166,10 +168,12 @@ export class ThemeColorExtractor {
 
 		// For FLAC and Menu, use control flow simulation
 		const simulator = new ControlFlowSimulator(this.decoder);
+		const themeRegister = func.themeRegister ?? 0; // Default to R0
 		const [registers] = simulator.simulate(
 			func.addr,
 			func.endAddr || func.addr + 500,
-			4
+			4,
+			themeRegister
 		);
 
 		// Extract colors in expected order

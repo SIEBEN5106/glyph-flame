@@ -510,7 +510,8 @@ export class ThemeDiscovery {
 					type: 'flac',
 					colorWrites: [],
 					preloadColors: {},
-					uiElement: flacBehavior.type !== 'unknown' ? 'FLAC String Text' : 'Unknown UI Element'
+					uiElement: flacBehavior.type !== 'unknown' ? 'FLAC String Text' : 'Unknown UI Element',
+					themeRegister: 1 // FLAC uses R1 for theme value
 				});
 			}
 		}

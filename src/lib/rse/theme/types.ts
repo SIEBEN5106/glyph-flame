@@ -60,6 +60,8 @@ export interface ThemeFunction {
 	readonly preloadColors: Readonly<Record<number, number>>;
 	/** UI element this function controls */
 	uiElement: string;
+	/** Register that holds the theme value (default: 0 for R0) */
+	readonly themeRegister?: number;
 	/** Analysis metadata */
 	readonly metadata?: ThemeFunctionMetadata;
 }

@@ -21,13 +21,14 @@ export class ControlFlowSimulator {
 	simulate(
 		funcAddr: number,
 		endAddr: number,
-		themeValue: number
+		themeValue: number,
+		themeRegister: number = 0
 	): [Map<number, number>, ColorWrite[], MovwRecord[]] {
 		const registers = new Map<number, number>();
 		for (let i = 0; i < 16; i++) {
 			registers.set(i, 0);
 		}
-		registers.set(0, themeValue);
+		registers.set(themeRegister, themeValue);
 
 		const registerSources = new Map<number, MovwRecord | null>();
 		for (let i = 0; i < 16; i++) {
@@ -36,7 +37,6 @@ export class ControlFlowSimulator {
 
 		const colorWrites: ColorWrite[] = [];
 		const movwRecords: MovwRecord[] = [];
-		const seenAddrs = new Set<number>();
 		let lastCmpResult = false;
 		let itBlockRemaining = 0;
 		const itConditions: boolean[] = [];
@@ -46,12 +46,6 @@ export class ControlFlowSimulator {
 		const maxSteps = 500;
 
 		for (let step = 0; step < maxSteps && addr < endAddr;) {
-			// Prevent infinite loops
-			if (seenAddrs.has(addr)) {
-				break;
-			}
-			seenAddrs.add(addr);
-
 			const instr = this.decoder.decode(addr);
 			const instrSize = instr.size;
 
@@ -88,7 +82,8 @@ export class ControlFlowSimulator {
 				colorWrites,
 				movwRecords,
 				lastCmpResult,
-				itConditions
+				itConditions,
+				endAddr
 			);
 
 			// Update state from instruction execution
@@ -124,7 +119,8 @@ export class ControlFlowSimulator {
 		colorWrites: ColorWrite[],
 		movwRecords: MovwRecord[],
 		lastCmpResult: boolean,
-		itConditions: boolean[]
+		itConditions: boolean[],
+		endAddr: number
 	): { newCmpResult: boolean | null; newItBlockRemaining: number | null; branchTo: number | null } {
 		let newCmpResult: boolean | null = null;
 		let newItBlockRemaining: number | null = null;
@@ -140,7 +136,8 @@ export class ControlFlowSimulator {
 				break;
 
 			case InstructionType.BX:
-				// Would return from function - stop simulation
+				// Would return from function - stop simulation by jumping beyond endAddr
+				branchTo = endAddr + 1;
 				break;
 
 			case InstructionType.MOVW:
@@ -177,8 +174,21 @@ export class ControlFlowSimulator {
 				break;
 
 			case InstructionType.CBZ:
+				// Compare and branch on zero
+				if (instr.rn >= 0 && instr.rn < 16) {
+					if ((registers.get(instr.rn) ?? 0) === 0) {
+						branchTo = this.getBranchTarget(instr);
+					}
+				}
+				break;
+
 			case InstructionType.CBNZ:
-				// Compare and branch on zero/non-zero - not fully tracked
+				// Compare and branch on non-zero
+				if (instr.rn >= 0 && instr.rn < 16) {
+					if ((registers.get(instr.rn) ?? 0) !== 0) {
+						branchTo = this.getBranchTarget(instr);
+					}
+				}
 				break;
 
 			case InstructionType.IT:
