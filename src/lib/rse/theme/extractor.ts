@@ -9,7 +9,7 @@ import { ThumbDecoder } from './thumb/index.js';
 import { ThemeDiscovery } from './discovery.js';
 import { ControlFlowSimulator } from './simulator.js';
 import { BehaviorAnalyzer } from './behavior.js';
-import { createColorMap, type ThemeFunction, type AnalysisResult, type FlacBehavior } from './types.js';
+import { createColorMap, type ThemeFunction, type AnalysisResult, type FlacBehavior, type ColorWrite } from './types.js';
 import {
 	NotFoundError,
 	AnalysisError,
@@ -62,50 +62,58 @@ export class ThemeColorExtractor {
 				};
 			}
 
-			// Analyze each function
-			const mergedColors = createColorMap();
-
-			for (const func of functions) {
-				// For switch_case patterns (Progress Bar and Marquee), extract from preloadColors
+			// Populate colorWrites for each function by simulating all themes
+			// This matches the Python implementation which calls simulator for each theme
+			const enrichedFunctions = functions.map(func => {
+				// For switch_case patterns (Progress Bar and Marquee), colors are in preloadColors
 				if (func.patternType === 'switch_case' && func.preloadColors) {
-					// Extract colors from preloadColors (already organized by theme index)
-					for (const [idx, color] of Object.entries(func.preloadColors)) {
-						const reg = parseInt(idx, 10);
-						if (!mergedColors.has(reg)) {
-							mergedColors.set(reg, []);
-						}
-						mergedColors.get(reg)!.push(color);
-					}
-				} else {
-					// For FLAC and Menu, use control flow simulation
-					const simulator = new ControlFlowSimulator(this.decoder);
-					const [registers] = simulator.simulate(
+					// Colors already in preloadColors, no need to simulate
+					return func;
+				}
+
+				// For FLAC and Menu (ite/preload_store patterns), simulate all themes
+				const simulator = new ControlFlowSimulator(this.decoder);
+				const allColorWrites: ColorWrite[] = [];
+
+				for (let themeId = 0; themeId < 5; themeId++) {
+					const [, colorWrites] = simulator.simulate(
 						func.addr,
 						func.endAddr || func.addr + 500,
-						4
+						themeId
 					);
 
-					// Extract colors from registers (R4-R8 for FLAC, R0-R14 for Menu)
-					for (const [reg, value] of registers.entries()) {
-						if (value !== 0) {
-							if (!mergedColors.has(reg)) {
-								mergedColors.set(reg, []);
-							}
-							mergedColors.get(reg)!.push(value);
-						}
+					// Add all colorWrites from this theme simulation
+					allColorWrites.push(...colorWrites);
+				}
+
+				// Return enriched function with populated colorWrites
+				return {
+					...func,
+					colorWrites: allColorWrites
+				} as ThemeFunction;
+			});
+
+			// Build mergedColors map for backward compatibility
+			// Extract colors from colorWrites organized by register
+			const mergedColors = createColorMap();
+			for (const func of enrichedFunctions) {
+				for (const write of func.colorWrites) {
+					if (!mergedColors.has(write.targetReg)) {
+						mergedColors.set(write.targetReg, []);
 					}
+					mergedColors.get(write.targetReg)!.push(write.colorValue);
 				}
 			}
 
 			// Determine FLAC behavior using behavior analysis
-			const flacBehavior = this.analyzeFlacBehavior(functions);
+			const flacBehavior = this.analyzeFlacBehavior(enrichedFunctions);
 
 			return {
 				version: 'Unknown',
-				themeFunctions: functions,
+				themeFunctions: enrichedFunctions,
 				colors: mergedColors,
 				flacBehavior,
-				canPatch: functions.length > 0
+				canPatch: enrichedFunctions.length > 0
 			};
 		} catch (error) {
 			throwThemeError(error, AnalysisError, 'Failed to extract theme colors');

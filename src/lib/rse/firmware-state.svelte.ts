@@ -340,6 +340,16 @@ export class FirmwareState {
         });
       }
 
+      // Register meaning mapping based on Python implementation
+      // R1: Highlight/Foreground color
+      // R2: Secondary color
+      // R3: Foreground color
+      const registerMeaning: Record<number, string> = {
+        1: 'Highlight',
+        2: 'Secondary',
+        3: 'Foreground'
+      };
+
       for (const func of result.themeFunctions) {
         if (func.type === 'menu' || func.uiElement.includes('Menu')) {
           // Extract colors from colorWrites (these have full instruction details)
@@ -355,11 +365,14 @@ export class FirmwareState {
               movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
             }
 
+            // Get semantic meaning from target register (R1=Highlight, R2=Secondary, R3=Foreground)
+            const registerMeaningKey = registerMeaning[write.targetReg] ?? `R${write.targetReg}`;
+
             menuColorEntries.push({
-              semantic: `Menu Text - Theme ${write.themeCondition ?? '?'}`,
+              semantic: `Menu Text - ${registerMeaningKey}`,
               color: write.colorValue,
               themeId: write.themeCondition ?? undefined,
-              register: write.sourceReg,
+              register: write.targetReg,
               movwAddress: movwAddr,
               movwInstruction: movwInstr,
               strhAddress: strhAddr,
@@ -370,78 +383,74 @@ export class FirmwareState {
         }
 
         if (func.type === 'flac' || func.uiElement.includes('FLAC')) {
-          for (const write of func.colorWrites) {
-            const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
-            const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+          // For FLAC, use flacBehavior to generate all 5 theme colors
+          // The simulator only gives us colorWrites for one theme branch, not all 5
+          // flacBehavior has colorFor4 and colorForOther, plus instruction details
 
-            let movwAddr: string | undefined;
-            let movwInstr: string | undefined;
-            if (write.movwInstr) {
-              movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
-              movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+          if (result.flacBehavior.isFlac) {
+            // Extract instruction addresses from flacBehavior
+            const movwAddr4 = result.flacBehavior.movwAddr4 || '-';
+            const movwInstr4 = result.flacBehavior.movwInstr4 || '-';
+            const movwAddrOther = result.flacBehavior.movwAddrOther || '-';
+            const movwInstrOther = result.flacBehavior.movwInstrOther || '-';
+
+            // Also get STRH details from first colorWrite (if available)
+            let strhAddr = '-';
+            let strhInstr = '-';
+            if (func.colorWrites.length > 0) {
+              const write = func.colorWrites[0];
+              strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+              strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
             }
 
-            flacColorEntries.push({
-              semantic: `Codec Info - Theme ${write.themeCondition ?? '?'}`,
-              color: write.colorValue,
-              themeId: write.themeCondition ?? undefined,
-              register: write.sourceReg,
-              movwAddress: movwAddr,
-              movwInstruction: movwInstr,
-              strhAddress: strhAddr,
-              strhInstruction: strhInstr,
-              isPatched: false
-            });
+            // Generate all 5 FLAC colors using flacBehavior
+            for (let themeId = 0; themeId < 5; themeId++) {
+              const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+              const movwAddr = themeId === 4 ? movwAddr4 : movwAddrOther;
+              const movwInstr = themeId === 4 ? movwInstr4 : movwInstrOther;
+
+              flacColorEntries.push({
+                semantic: 'Codec Info',
+                color: color,
+                themeId: themeId,
+                register: undefined,
+                movwAddress: movwAddr === '-' ? undefined : movwAddr,
+                movwInstruction: movwInstr === '-' ? undefined : movwInstr,
+                strhAddress: strhAddr === '-' ? undefined : strhAddr,
+                strhInstruction: strhInstr === '-' ? undefined : strhInstr,
+                isPatched: false
+              });
+            }
+          } else {
+            // Fallback: extract from colorWrites (may not have all themes)
+            for (const write of func.colorWrites) {
+              const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+              const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+
+              let movwAddr: string | undefined;
+              let movwInstr: string | undefined;
+              if (write.movwInstr) {
+                movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
+                movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+              }
+
+              flacColorEntries.push({
+                semantic: 'Codec Info',
+                color: write.colorValue,
+                themeId: write.themeCondition ?? undefined,
+                register: write.sourceReg,
+                movwAddress: movwAddr,
+                movwInstruction: movwInstr,
+                strhAddress: strhAddr,
+                strhInstruction: strhInstr,
+                isPatched: false
+              });
+            }
           }
         }
       }
 
       console.log('[buildColorTree] Extracted colors from colorWrites:', {
-        menuEntries: menuColorEntries.length,
-        flacEntries: flacColorEntries.length
-      });
-
-      // Extract colors from colors map (for Menu colors)
-      // FLAC colors come from flacBehavior, not from colors map
-      console.log('[buildColorTree] Extracting Menu colors from colors map with', result.colors.size, 'registers');
-      for (const [reg, colors] of result.colors.entries()) {
-        // Menu uses registers R0-R14, but based on Python output mainly R1, R2, R3
-        // The colors are organized as 3 values per register (Primary, Secondary, Tertiary)
-        if (reg >= 0 && reg <= 14) {
-          console.log('[buildColorTree] Menu: Register', reg, 'has', colors.length, 'colors');
-          for (let i = 0; i < colors.length; i++) {
-            const themeId = Math.floor(i / 3);
-            const semanticLabels = ['Primary', 'Secondary', 'Tertiary'];
-
-            menuColorEntries.push({
-              semantic: `Menu Text - ${semanticLabels[i % 3]}`,
-              color: colors[i],
-              themeId,
-              register: reg
-            });
-          }
-        }
-      }
-
-      // Extract FLAC colors from flacBehavior
-      console.log('[buildColorTree] Extracting FLAC colors from flacBehavior:', result.flacBehavior);
-      if (result.flacBehavior.isFlac) {
-        // Themes 0-3 use colorForOther, theme 4 uses colorFor4
-        for (let themeId = 0; themeId < 5; themeId++) {
-          const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
-          flacColorEntries.push({
-            semantic: `Codec Info - Theme ${themeId}`,
-            color: color,
-            themeId,
-            register: undefined
-          });
-        }
-        console.log('[buildColorTree] FLAC colors extracted:', flacColorEntries.length);
-      } else {
-        console.warn('[buildColorTree] FLAC behavior analysis failed to detect FLAC function');
-      }
-
-      console.log('[buildColorTree] After adding colors map, totals:', {
         menuEntries: menuColorEntries.length,
         flacEntries: flacColorEntries.length
       });
@@ -494,7 +503,8 @@ export class FirmwareState {
   deduplicateColors(entries: ColorEntry[]): ColorEntry[] {
     const seen = new Set<string>();
     return entries.filter(entry => {
-      const key = `${entry.semantic}-${entry.color}`;
+      // Include themeId in the key so entries with different themes are not deduplicated
+      const key = `${entry.semantic}-${entry.color}-${entry.themeId ?? 'unknown'}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
