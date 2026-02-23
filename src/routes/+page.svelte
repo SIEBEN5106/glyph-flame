@@ -313,6 +313,22 @@
                         hideProperty={true}
                         onDoubleClick={(entry) => fwState.openColorDetail(entry)}
                       />
+                    {:else if fwState.selectedNode.label.includes('Progress Bar') || fwState.selectedNode.id === 'colors-progress'}
+                      <ColorTable
+                        entries={fwState.colorData.progressColors}
+                        title="Progress Bar Background Color"
+                        height="100%"
+                        hideProperty={true}
+                        onDoubleClick={(entry) => fwState.openColorDetail(entry)}
+                      />
+                    {:else if fwState.selectedNode.label.includes('Marquee') || fwState.selectedNode.id === 'colors-marquee'}
+                      <ColorTable
+                        entries={fwState.colorData.marqueeColors}
+                        title="Marquee Overlay Color"
+                        height="100%"
+                        hideProperty={true}
+                        onDoubleClick={(entry) => fwState.openColorDetail(entry)}
+                      />
                     {:else if fwState.selectedNode.label.startsWith('Theme')}
                       {@const selectedTheme = (fwState.selectedNode.data && 'themeId' in fwState.selectedNode.data) ? fwState.selectedNode.data.themeId : undefined}
                       {@const themeColors = fwState.colorData.menuColors.filter(c => c.themeId === selectedTheme)}
@@ -328,7 +344,7 @@
                       {/if}
                     {:else}
                       <ColorTable
-                        entries={[...fwState.colorData.menuColors, ...fwState.colorData.flacColors]}
+                        entries={[...fwState.colorData.menuColors, ...fwState.colorData.flacColors, ...fwState.colorData.progressColors, ...fwState.colorData.marqueeColors]}
                         title="All Colors"
                         height="100%"
                         onDoubleClick={(entry) => fwState.openColorDetail(entry)}

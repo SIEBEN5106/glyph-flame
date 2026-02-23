@@ -39,7 +39,7 @@ export interface BitmapFileInfo {
 
 export interface ColorNodeData {
   themeId?: number;
-  parentType?: 'menu' | 'flac';
+  parentType?: 'menu' | 'flac' | 'progress' | 'marquee';
 }
 
 export interface TreeNode {
@@ -107,6 +107,8 @@ export class FirmwareState {
   colorData = $state<{
     menuColors: ColorEntry[];
     flacColors: ColorEntry[];
+    progressColors: ColorEntry[];
+    marqueeColors: ColorEntry[];
   } | null>(null);
 
   // Color detail window state
@@ -318,6 +320,8 @@ export class FirmwareState {
       // Extract Menu colors (R0-R14 typically)
       const menuColorEntries: ColorEntry[] = [];
       const flacColorEntries: ColorEntry[] = [];
+      const progressColorEntries: ColorEntry[] = [];
+      const marqueeColorEntries: ColorEntry[] = [];
 
       // Register meaning mapping based on Python implementation
       // R1: Highlight/Foreground color
@@ -466,15 +470,55 @@ export class FirmwareState {
             }
           }
         }
+
+        if (func.type === 'progress') {
+          // Progress Bar uses preloadColors (switch_case pattern)
+          for (let themeId = 0; themeId < 5; themeId++) {
+            const color = func.preloadColors[themeId] ?? 0;
+            progressColorEntries.push({
+              semantic: 'Progress Bar',
+              color: color,
+              themeId: themeId,
+              register: undefined,
+              movwAddress: undefined,
+              movwInstruction: undefined,
+              strhAddress: undefined,
+              strhInstruction: undefined,
+              isPatched: false
+            });
+          }
+        }
+
+        if (func.type === 'marquee') {
+          // Marquee Overlay uses preloadColors (switch_case pattern)
+          for (let themeId = 0; themeId < 5; themeId++) {
+            const color = func.preloadColors[themeId] ?? 0;
+            marqueeColorEntries.push({
+              semantic: 'Marquee Overlay',
+              color: color,
+              themeId: themeId,
+              register: undefined,
+              movwAddress: undefined,
+              movwInstruction: undefined,
+              strhAddress: undefined,
+              strhInstruction: undefined,
+              isPatched: false
+            });
+          }
+        }
       }
 
       // Remove duplicates
       const uniqueMenuColors = this.deduplicateColors(menuColorEntries);
       const uniqueFlacColors = this.deduplicateColors(flacColorEntries);
+      const uniqueProgressColors = this.deduplicateColors(progressColorEntries);
+      const uniqueMarqueeColors = this.deduplicateColors(marqueeColorEntries);
 
       this.colorData = {
         menuColors: uniqueMenuColors,
-        flacColors: uniqueFlacColors
+        flacColors: uniqueFlacColors,
+        progressColors: uniqueProgressColors,
+        marqueeColors: uniqueMarqueeColors
       };
 
       // Build color tree node with theme sub-nodes for Menu colors
@@ -506,11 +550,29 @@ export class FirmwareState {
         data: flacNodeData
       };
 
+      // Progress Bar colors (single node with theme filtering in UI)
+      const progressNodeData: ColorNodeData = { parentType: 'progress' };
+      const progressColorNode: TreeNode = {
+        id: 'colors-progress',
+        label: 'Progress Bar Background',
+        type: 'colors' as const,
+        data: progressNodeData
+      };
+
+      // Marquee Overlay colors (single node with theme filtering in UI)
+      const marqueeNodeData: ColorNodeData = { parentType: 'marquee' };
+      const marqueeColorNode: TreeNode = {
+        id: 'colors-marquee',
+        label: 'Marquee Overlay Color',
+        type: 'colors' as const,
+        data: marqueeNodeData
+      };
+
       const colorsNode: TreeNode = {
         id: 'colors',
         label: 'Colors',
         type: 'folder' as const,
-        children: [menuColorNode, flacColorNode]
+        children: [menuColorNode, flacColorNode, progressColorNode, marqueeColorNode]
       };
 
       // Add to tree nodes
