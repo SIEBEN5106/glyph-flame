@@ -12,6 +12,7 @@ import { CodeReferenceAnalyzer, type LandingPoint, type NopSlideAnalysis } from 
 import { PatchDetector } from './detector.js';
 import { createPatchMetadata, writePatchMetadata } from './metadata.js';
 import { discoverFlacFunction, discoverMenuFunction, findFunctionStart, discoverPatchesBySignature } from './discovery.js';
+import { ThemeColorExtractor } from './extractor.js';
 import {
 	type PatchResult,
 	type PatchPoint,
@@ -244,6 +245,35 @@ export class ThemePatcher {
 	}
 
 	/**
+	 * Extract ground truth colors from firmware (unpatched colors)
+	 * Returns the current FLAC and Menu colors stored in the firmware
+	 */
+	extractGroundTruthColors(): { flacColors: number[]; menuColors: number[] } {
+		const extractor = new ThemeColorExtractor(this.data);
+		const result = extractor.extract();
+
+		// Extract FLAC colors (5 themes)
+		const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
+		let flacColors: number[] = [];
+		if (flacFunc) {
+			flacColors = extractor.getColorsForFunction('flac');
+		} else {
+			throw new ThemeError('FLAC function not found in firmware');
+		}
+
+		// Extract Menu colors (5 themes × 3 attributes = 15 colors)
+		const menuFunc = result.themeFunctions.find(f => f.type === 'menu');
+		let menuColors: number[] = [];
+		if (menuFunc) {
+			menuColors = extractor.getColorsForFunction('menu');
+		} else {
+			throw new ThemeError('Menu function not found in firmware');
+		}
+
+		return { flacColors, menuColors };
+	}
+
+	/**
 	 * Find existing NOP slide from patched firmware
 	 *
 	 * Uses signature-based discovery to find our patch code and NOP slide.
@@ -264,19 +294,43 @@ export class ThemePatcher {
 			start--;
 		}
 
-		// For the end, search forward from beyond the handler code
-		// (handlers are typically < 512 bytes)
-		let end = nopSlideAddr + 512;
-		while (end < this.data.length && this.data[end] === 0x00) {
-			end++;
+		// For the end, search forward for the metadata signature
+		// Metadata is 51 bytes and starts with 'ECHO' magic
+		const METADATA_SIZE = 51;
+		const MAX_SEARCH = 1024;
+
+		let end = nopSlideAddr + 200; // Start searching from a reasonable offset
+		let foundMetadata = false;
+
+		for (let searchEnd = nopSlideAddr + MAX_SEARCH; searchEnd > end && end < this.data.length - METADATA_SIZE; end++) {
+			// Check for 'ECHO' magic at position (end - METADATA_SIZE)
+			const metadataStart = end - METADATA_SIZE;
+			if (metadataStart >= nopSlideAddr &&
+				this.data[metadataStart] === 0x45 &&  // 'E'
+				this.data[metadataStart + 1] === 0x43 &&  // 'C'
+				this.data[metadataStart + 2] === 0x48 &&  // 'H'
+				this.data[metadataStart + 3] === 0x4F) {  // 'O'
+				foundMetadata = true;
+				end = metadataStart + METADATA_SIZE;
+				break;
+			}
 		}
 
-		// Cap at a reasonable size (typical NOP slide is a few hundred bytes)
-		const nopSlideSize = Math.min(end - start, 1024);  // Cap at 1KB for safety
+		// If metadata not found, fall back to searching for zeros
+		if (!foundMetadata) {
+			end = nopSlideAddr + 512;
+			while (end < this.data.length && this.data[end] === 0x00) {
+				end++;
+			}
+			// Cap at a reasonable size
+			end = Math.min(end, nopSlideAddr + 1024);
+		}
+
+		const nopSlideSize = end - start;
 
 		return {
 			start,
-			end: start + nopSlideSize,
+			end,
 			size: nopSlideSize,
 			source: 'existing-patch',
 			isActive: true,
@@ -285,9 +339,118 @@ export class ThemePatcher {
 	}
 
 	/**
-	 * Patch firmware with custom colors
+	 * Patch firmware with custom colors (supports partial patching)
+	 *
+	 * @param options - Patch options with optional flacColors and/or menuColors
+	 * @param outputPath - Path to write patched firmware
+	 * @param writeFile - Whether to write to disk (default: true)
 	 */
 	patch(
+		options: {
+			flacColors?: number[];
+			menuColors?: number[];
+		},
+		outputPath: string,
+		writeFile = true
+	): PatchResult {
+		// Validate that at least one color set is provided
+		if (!options.flacColors && !options.menuColors) {
+			throw new ValidationError('At least one of flacColors or menuColors must be provided');
+		}
+
+		// Check if firmware is already patched
+		const analysis = this.analyze();
+		const isPatched = analysis.patchStatus.isPatched;
+
+		// Extract or validate colors
+		let flacColors = options.flacColors ?? null;
+		let menuColors = options.menuColors ?? null;
+
+		// If only one color set is provided, extract the other
+		if (flacColors && !menuColors) {
+			// FLAC only: extract Menu colors
+			if (isPatched) {
+				// Read from existing patch metadata
+				const existingNopSlide = this.findExistingNopSlide();
+				if (!existingNopSlide) {
+					throw new PatchError(
+						'Cannot extract Menu colors from patched firmware: unable to locate existing patch.\n\n' +
+						'This may indicate a corrupted or incompatible patch.\n' +
+						'Please start with a clean original firmware file.'
+					);
+				}
+				const metadata = this.detector.readPatchMetadata(existingNopSlide);
+				if (!metadata) {
+					throw new PatchError(
+						'Cannot extract Menu colors from patched firmware: unable to read patch metadata.\n\n' +
+						'This may indicate a corrupted or incompatible patch.\n' +
+						'Please start with a clean original firmware file.'
+					);
+				}
+				menuColors = [...metadata.menuColors]; // Create mutable copy
+				console.error('[INFO] Patching FLAC only - keeping existing Menu colors from patch');
+			} else {
+				// Not patched: extract ground truth
+				const groundTruth = this.extractGroundTruthColors();
+				menuColors = [...groundTruth.menuColors]; // Create mutable copy
+				console.error('[INFO] Patching FLAC only - using ground truth Menu colors');
+			}
+		} else if (!flacColors && menuColors) {
+			// Menu only: extract FLAC colors
+			if (isPatched) {
+				// Read from existing patch metadata
+				const existingNopSlide = this.findExistingNopSlide();
+				if (!existingNopSlide) {
+					throw new PatchError(
+						'Cannot extract FLAC colors from patched firmware: unable to locate existing patch.\n\n' +
+						'This may indicate a corrupted or incompatible patch.\n' +
+						'Please start with a clean original firmware file.'
+					);
+				}
+				const metadata = this.detector.readPatchMetadata(existingNopSlide);
+				if (!metadata) {
+					throw new PatchError(
+						'Cannot extract FLAC colors from patched firmware: unable to read patch metadata.\n\n' +
+						'This may indicate a corrupted or incompatible patch.\n' +
+						'Please start with a clean original firmware file.'
+					);
+				}
+				flacColors = [...metadata.flacColors]; // Create mutable copy
+				console.error('[INFO] Patching Menu only - keeping existing FLAC colors from patch');
+			} else {
+				// Not patched: extract ground truth
+				const groundTruth = this.extractGroundTruthColors();
+				flacColors = [...groundTruth.flacColors]; // Create mutable copy
+				console.error('[INFO] Patching Menu only - using ground truth FLAC colors');
+			}
+		}
+
+		// Now call the internal implementation with both color sets
+		return this.patchImpl(flacColors!, menuColors!, outputPath, writeFile);
+	}
+
+	/**
+	 * Patch firmware with custom colors (backward compatible API)
+	 *
+	 * Original API that requires both FLAC and Menu colors.
+	 * This method is kept for backward compatibility.
+	 *
+	 * @deprecated Use patch({ flacColors, menuColors }, outputPath) instead
+	 */
+	patchOriginal(
+		flacColors: number[],
+		menuColors: number[],
+		outputPath: string,
+		writeFile = true
+	): PatchResult {
+		return this.patchImpl(flacColors, menuColors, outputPath, writeFile);
+	}
+
+	/**
+	 * Internal patch implementation
+	 * @private
+	 */
+	patchImpl(
 		flacColors: number[],
 		menuColors: number[],
 		outputPath: string,
@@ -724,7 +887,7 @@ export function patchFirmware(
 	outputPath: string
 ): PatchResult {
 	const patcher = new ThemePatcher(firmwareData);
-	return patcher.patch(flacColors, menuColors, outputPath, true);
+	return patcher.patchOriginal(flacColors, menuColors, outputPath, true);
 }
 
 // Re-export types and functions for convenience

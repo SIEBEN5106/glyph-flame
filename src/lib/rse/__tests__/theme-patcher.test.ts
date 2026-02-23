@@ -19,7 +19,8 @@ import {
 	findFunctionStart,
 	NopSlideFinder,
 	PatchDetector,
-	crc16
+	crc16,
+	ValidationError
 } from '../theme/index.js';
 import type { FirmwareFile } from '../extractors/batch-processor.js';
 import { fileIO } from '../utils/file-io.js';
@@ -440,7 +441,7 @@ describe('Theme Patcher - Full Patching Workflow', () => {
 		const flacColors = [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000];
 		const menuColors = [0xf800, 0xf800, 0xf800, 0x001f, 0x001f, 0x001f, 0xffe0, 0xffe0, 0xffe0, 0x07ff, 0x07ff, 0x07ff, 0x0000, 0x0000, 0x0000];
 
-		const result = patcher.patch(flacColors, menuColors, '/tmp/test.IMG', true);
+		const result = patcher.patch({ flacColors, menuColors }, '/tmp/test.IMG', true);
 
 		expect(result.success).toBe(true);
 		expect(result.nopSlide.start).toBeGreaterThan(0);
@@ -453,17 +454,12 @@ describe('Theme Patcher - Full Patching Workflow', () => {
 
 		// Too few FLAC colors
 		expect(() =>
-			patcher.patch([0xf800, 0x001f, 0xffe0], [0xf800, 0xf800, 0xf800], '/tmp/test.IMG', true)
+			patcher.patch({ flacColors: [0xf800, 0x001f, 0xffe0], menuColors: [0xf800, 0xf800, 0xf800] }, '/tmp/test.IMG', true)
 		).toThrow();
 
 		// Too many menu colors
 		expect(() =>
-			patcher.patch(
-				[0xf800, 0xf800, 0xf800, 0xf800, 0xf800],
-				Array.from({ length: 20 }, () => 0xf800),
-				'/tmp/test.IMG',
-				true
-			)
+			patcher.patch({ flacColors: [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000], menuColors: Array.from({ length: 20 }, () => 0xf800) }, '/tmp/test.IMG', true)
 		).toThrow();
 	});
 });
@@ -481,7 +477,7 @@ describe('Theme Patcher - Round-trip Color Extraction', () => {
 
 		// Patch the firmware
 		const patcher = new ThemePatcher(firmwareData);
-		const result = patcher.patch(originalFlacColors, menuColors, '/tmp/test_roundtrip_flac.IMG', true);
+		const result = patcher.patch({ flacColors: originalFlacColors, menuColors }, '/tmp/test_roundtrip_flac.IMG', true);
 
 		expect(result.success).toBe(true);
 		expect(result.nopSlide).not.toBeNull();
@@ -514,7 +510,7 @@ describe('Theme Patcher - Round-trip Color Extraction', () => {
 
 		// Patch the firmware
 		const patcher = new ThemePatcher(firmwareData);
-		const result = patcher.patch(flacColors, originalMenuColors, '/tmp/test_roundtrip_menu.IMG', true);
+		const result = patcher.patch({ flacColors, menuColors: originalMenuColors }, '/tmp/test_roundtrip_menu.IMG', true);
 
 		expect(result.success).toBe(true);
 		expect(result.nopSlide).not.toBeNull();
@@ -543,7 +539,7 @@ describe('Theme Patcher - Round-trip Color Extraction', () => {
 
 		// Patch the firmware
 		const patcher = new ThemePatcher(firmwareData);
-		const result = patcher.patch(originalFlacColors, originalMenuColors, '/tmp/test_roundtrip_metadata.IMG', true);
+		const result = patcher.patch({ flacColors: originalFlacColors, menuColors: originalMenuColors }, '/tmp/test_roundtrip_metadata.IMG', true);
 
 		expect(result.success).toBe(true);
 		expect(result.nopSlide).not.toBeNull();
@@ -589,8 +585,7 @@ describe('Theme Patcher - Re-patching', () => {
 
 		const patcher = new ThemePatcher(firmwareData);
 		const firstResult = patcher.patch(
-			originalFlacColors,
-			originalMenuColors,
+			{ flacColors: originalFlacColors, menuColors: originalMenuColors },
 			'/tmp/test_repatch_first.IMG',
 			true
 		);
@@ -611,8 +606,7 @@ describe('Theme Patcher - Re-patching', () => {
 		const repatcher = new ThemePatcher(patchedFirmware);
 
 		const secondResult = repatcher.patch(
-			newFlacColors,
-			newMenuColors,
+			{ flacColors: newFlacColors, menuColors: newMenuColors },
 			'/tmp/test_repatch_second.IMG',
 			true
 		);
@@ -651,7 +645,7 @@ describe('Theme Patcher - Patch Independence and Order', () => {
 		const flacColors = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555];
 		const menuColors = Array(15).fill(0x9999);
 
-		const result = patcher.patch(flacColors, menuColors, '/tmp/test_independence.IMG', true);
+		const result = patcher.patch({ flacColors, menuColors }, '/tmp/test_independence.IMG', true);
 
 		expect(result.success).toBe(true);
 		expect(result.patchPoints['flac']).toBeDefined();
@@ -677,7 +671,7 @@ describe('Theme Patcher - Patch Independence and Order', () => {
 		const flacColors = [0xF800, 0x07E0, 0x001F, 0xFFFF, 0x0000];
 		const menuColors = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF];
 
-		const result = patcher.patch(flacColors, menuColors, '/tmp/test_metadata_independence.IMG', true);
+		const result = patcher.patch({ flacColors, menuColors }, '/tmp/test_metadata_independence.IMG', true);
 
 		expect(result.success).toBe(true);
 		expect(result.metadataAddr).toBeGreaterThan(0);
@@ -709,7 +703,7 @@ describe('Theme Patcher - Patch Independence and Order', () => {
 		const initialMenu = [0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888, 0x9999];
 
 		const patcher1 = new ThemePatcher(firmwareData);
-		const result1 = patcher1.patch(initialFlac, initialMenu, '/tmp/test_flac_update1.IMG', true);
+		const result1 = patcher1.patch({ flacColors: initialFlac, menuColors: initialMenu }, '/tmp/test_flac_update1.IMG', true);
 
 		expect(result1.success).toBe(true);
 
@@ -720,7 +714,7 @@ describe('Theme Patcher - Patch Independence and Order', () => {
 		const newFlac = [0xF800, 0x07E0, 0x001F, 0xFFE0, 0x8410]; // Completely different
 		const sameMenu = initialMenu; // Exactly the same
 
-		const result2 = patcher2.patch(newFlac, sameMenu, '/tmp/test_flac_update2.IMG', true);
+		const result2 = patcher2.patch({ flacColors: newFlac, menuColors: sameMenu }, '/tmp/test_flac_update2.IMG', true);
 
 		expect(result2.success).toBe(true);
 
@@ -747,7 +741,7 @@ describe('Theme Patcher - Patch Independence and Order', () => {
 		const initialMenu = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 		const patcher1 = new ThemePatcher(firmwareData);
-		const result1 = patcher1.patch(initialFlac, initialMenu, '/tmp/test_menu_update1.IMG', true);
+		const result1 = patcher1.patch({ flacColors: initialFlac, menuColors: initialMenu }, '/tmp/test_menu_update1.IMG', true);
 
 		expect(result1.success).toBe(true);
 
@@ -758,7 +752,7 @@ describe('Theme Patcher - Patch Independence and Order', () => {
 		const sameFlac = initialFlac; // Exactly the same
 		const newMenu = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114]; // Completely different
 
-		const result2 = patcher2.patch(sameFlac, newMenu, '/tmp/test_menu_update2.IMG', true);
+		const result2 = patcher2.patch({ flacColors: sameFlac, menuColors: newMenu }, '/tmp/test_menu_update2.IMG', true);
 
 		expect(result2.success).toBe(true);
 
@@ -785,7 +779,7 @@ describe('Theme Patcher - Patch Independence and Order', () => {
 		const menuColors = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF];
 
 		const patcher = new ThemePatcher(firmwareData);
-		const result = patcher.patch(flacColors, menuColors, '/tmp/test_registers.IMG', true);
+		const result = patcher.patch({ flacColors, menuColors }, '/tmp/test_registers.IMG', true);
 
 		expect(result.success).toBe(true);
 
@@ -811,6 +805,348 @@ describe('Theme Patcher - Patch Independence and Order', () => {
 			// Verify handlers are in different regions
 			expect(flacCodeAddr).toBeLessThan(expectedMenuAddr);
 		}
+	});
+});
+
+describe('Theme Patcher - Partial Patching', () => {
+	/**
+	 * Test partial patching: FLAC-only or Menu-only
+	 * Verifies that we can patch just one set of colors while preserving the other
+	 *
+	 * Extended timeout: These tests perform multiple patching operations,
+	 * which can take longer than the default 5 second timeout.
+	 */
+
+	it('should support patching only FLAC colors on unpatched firmware', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// Extract ground truth to verify
+		const groundTruth = patcher.extractGroundTruthColors();
+		expect(groundTruth.flacColors).toHaveLength(5);
+		expect(groundTruth.menuColors).toHaveLength(15);
+
+		// Patch only FLAC (Menu should use ground truth)
+		const newFlac = [0xF800, 0x07E0, 0x001F, 0xFFE0, 0x8410];
+		const result = patcher.patch({ flacColors: newFlac }, '/tmp/test_partial_flac.IMG', true);
+
+		expect(result.success).toBe(true);
+
+		// Verify FLAC was patched, Menu uses ground truth
+		const patched = fileIO.readFileSync('/tmp/test_partial_flac.IMG');
+		const detector = new PatchDetector(patched, 'test');
+
+		if (result.nopSlide) {
+			const metadata = detector.readPatchMetadata(result.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(newFlac); // New FLAC colors
+				expect(metadata.menuColors).toEqual(groundTruth.menuColors); // Ground truth Menu
+			}
+		}
+	});
+
+	it('should support patching only Menu colors on unpatched firmware', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// Extract ground truth to verify
+		const groundTruth = patcher.extractGroundTruthColors();
+		expect(groundTruth.flacColors).toHaveLength(5);
+		expect(groundTruth.menuColors).toHaveLength(15);
+
+		// Patch only Menu (FLAC should use ground truth)
+		const newMenu = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888, 0x9999, 0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF];
+		const result = patcher.patch({ menuColors: newMenu }, '/tmp/test_partial_menu.IMG', true);
+
+		expect(result.success).toBe(true);
+
+		// Verify Menu was patched, FLAC uses ground truth
+		const patched = fileIO.readFileSync('/tmp/test_partial_menu.IMG');
+		const detector = new PatchDetector(patched, 'test');
+
+		if (result.nopSlide) {
+			const metadata = detector.readPatchMetadata(result.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(groundTruth.flacColors); // Ground truth FLAC
+				expect(metadata.menuColors).toEqual(newMenu); // New Menu colors
+			}
+		}
+	});
+
+	it('should support patching only FLAC colors on already patched firmware', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+
+		// First patch with both colors
+		const initialFlac = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555];
+		const initialMenu = [0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888, 0x9999];
+
+		const patcher1 = new ThemePatcher(firmwareData);
+		const result1 = patcher1.patch({ flacColors: initialFlac, menuColors: initialMenu }, '/tmp/test_partial_flac_patch1.IMG', true);
+
+		expect(result1.success).toBe(true);
+
+		// Re-patch with only FLAC (Menu should keep existing colors)
+		const patched1 = fileIO.readFileSync('/tmp/test_partial_flac_patch1.IMG');
+		const patcher2 = new ThemePatcher(patched1);
+
+		const newFlac = [0xF800, 0x07E0, 0x001F, 0xFFE0, 0x8410]; // Completely different
+		const result2 = patcher2.patch({ flacColors: newFlac }, '/tmp/test_partial_flac_patch2.IMG', true);
+
+		expect(result2.success).toBe(true);
+
+		// Verify FLAC was updated, Menu kept existing colors
+		const patched2 = fileIO.readFileSync('/tmp/test_partial_flac_patch2.IMG');
+		const detector = new PatchDetector(patched2, 'test');
+
+		if (result2.nopSlide) {
+			const metadata = detector.readPatchMetadata(result2.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(newFlac); // Changed
+				expect(metadata.menuColors).toEqual(initialMenu); // Unchanged
+			}
+		}
+	});
+
+	it('should support patching only Menu colors on already patched firmware', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+
+		// First patch with both colors
+		const initialFlac = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555];
+		const initialMenu = [0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF, 0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888, 0x9999];
+
+		const patcher1 = new ThemePatcher(firmwareData);
+		const result1 = patcher1.patch({ flacColors: initialFlac, menuColors: initialMenu }, '/tmp/test_partial_menu_patch1.IMG', true);
+
+		expect(result1.success).toBe(true);
+
+		// Re-patch with only Menu (FLAC should keep existing colors)
+		const patched1 = fileIO.readFileSync('/tmp/test_partial_menu_patch1.IMG');
+		const patcher2 = new ThemePatcher(patched1);
+
+		const newMenu = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114]; // Completely different
+		const result2 = patcher2.patch({ menuColors: newMenu }, '/tmp/test_partial_menu_patch2.IMG', true);
+
+		expect(result2.success).toBe(true);
+
+		// Verify Menu was updated, FLAC kept existing colors
+		const patched2 = fileIO.readFileSync('/tmp/test_partial_menu_patch2.IMG');
+		const detector = new PatchDetector(patched2, 'test');
+
+		if (result2.nopSlide) {
+			const metadata = detector.readPatchMetadata(result2.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(initialFlac); // Unchanged
+				expect(metadata.menuColors).toEqual(newMenu); // Changed
+			}
+		}
+	});
+
+	it('should support patching FLAC-only twice (FLAC → FLAC)', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// Extract ground truth
+		const groundTruth = patcher.extractGroundTruthColors();
+
+		// First: FLAC-only (Menu uses ground truth)
+		const firstFlac = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555];
+		const result1 = patcher.patch({ flacColors: firstFlac }, '/tmp/test_seq_flac_flac1.IMG', true);
+		expect(result1.success).toBe(true);
+
+		// Second: FLAC-only again (Menu should still use ground truth)
+		const patched1 = fileIO.readFileSync('/tmp/test_seq_flac_flac1.IMG');
+		const patcher2 = new ThemePatcher(patched1);
+
+		const secondFlac = [0xF800, 0x07E0, 0x001F, 0xFFE0, 0x8410];
+		const result2 = patcher2.patch({ flacColors: secondFlac }, '/tmp/test_seq_flac_flac2.IMG', true);
+		expect(result2.success).toBe(true);
+
+		// Verify: Second FLAC, Menu still ground truth
+		const patched2 = fileIO.readFileSync('/tmp/test_seq_flac_flac2.IMG');
+		const detector = new PatchDetector(patched2, 'test');
+
+		if (result2.nopSlide) {
+			const metadata = detector.readPatchMetadata(result2.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(secondFlac); // Second FLAC
+				expect(metadata.menuColors).toEqual(groundTruth.menuColors); // Still ground truth
+			}
+		}
+	});
+
+	it('should support patching FLAC-only then Menu-only (FLAC → Menu)', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// First: FLAC-only
+		const firstFlac = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555];
+		const result1 = patcher.patch({ flacColors: firstFlac }, '/tmp/test_seq_flac_menu1.IMG', true);
+		expect(result1.success).toBe(true);
+
+		// Second: Menu-only (FLAC should keep first FLAC)
+		const patched1 = fileIO.readFileSync('/tmp/test_seq_flac_menu1.IMG');
+		const patcher2 = new ThemePatcher(patched1);
+
+		const newMenu = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114];
+		const result2 = patcher2.patch({ menuColors: newMenu }, '/tmp/test_seq_flac_menu2.IMG', true);
+		expect(result2.success).toBe(true);
+
+		// Verify: First FLAC, new Menu
+		const patched2 = fileIO.readFileSync('/tmp/test_seq_flac_menu2.IMG');
+		const detector = new PatchDetector(patched2, 'test');
+
+		if (result2.nopSlide) {
+			const metadata = detector.readPatchMetadata(result2.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(firstFlac); // First FLAC unchanged
+				expect(metadata.menuColors).toEqual(newMenu); // New Menu
+			}
+		}
+	});
+
+	it('should support patching FLAC-only then Both (FLAC → Both)', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// First: FLAC-only
+		const firstFlac = [0x1111, 0x2222, 0x3333, 0x4444, 0x5555];
+		const result1 = patcher.patch({ flacColors: firstFlac }, '/tmp/test_seq_flac_both1.IMG', true);
+		expect(result1.success).toBe(true);
+
+		// Second: Both (new FLAC, new Menu)
+		const patched1 = fileIO.readFileSync('/tmp/test_seq_flac_both1.IMG');
+		const patcher2 = new ThemePatcher(patched1);
+
+		const secondFlac = [0xF800, 0x07E0, 0x001F, 0xFFE0, 0x8410];
+		const newMenu = [200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214];
+		const result2 = patcher2.patch({ flacColors: secondFlac, menuColors: newMenu }, '/tmp/test_seq_flac_both2.IMG', true);
+		expect(result2.success).toBe(true);
+
+		// Verify: Second FLAC, new Menu
+		const patched2 = fileIO.readFileSync('/tmp/test_seq_flac_both2.IMG');
+		const detector = new PatchDetector(patched2, 'test');
+
+		if (result2.nopSlide) {
+			const metadata = detector.readPatchMetadata(result2.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(secondFlac); // Second FLAC
+				expect(metadata.menuColors).toEqual(newMenu); // New Menu
+			}
+		}
+	});
+
+	it('should support patching Menu-only twice (Menu → Menu)', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// Extract ground truth
+		const groundTruth = patcher.extractGroundTruthColors();
+
+		// First: Menu-only (FLAC uses ground truth)
+		const firstMenu = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+		const result1 = patcher.patch({ menuColors: firstMenu }, '/tmp/test_seq_menu_menu1.IMG', true);
+		expect(result1.success).toBe(true);
+
+		// Second: Menu-only again (FLAC should still use ground truth)
+		const patched1 = fileIO.readFileSync('/tmp/test_seq_menu_menu1.IMG');
+		const patcher2 = new ThemePatcher(patched1);
+
+		const secondMenu = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114];
+		const result2 = patcher2.patch({ menuColors: secondMenu }, '/tmp/test_seq_menu_menu2.IMG', true);
+		expect(result2.success).toBe(true);
+
+		// Verify: FLAC still ground truth, second Menu
+		const patched2 = fileIO.readFileSync('/tmp/test_seq_menu_menu2.IMG');
+		const detector = new PatchDetector(patched2, 'test');
+
+		if (result2.nopSlide) {
+			const metadata = detector.readPatchMetadata(result2.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(groundTruth.flacColors); // Still ground truth
+				expect(metadata.menuColors).toEqual(secondMenu); // Second Menu
+			}
+		}
+	});
+
+	it('should support patching Menu-only then FLAC-only (Menu → FLAC)', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// First: Menu-only
+		const firstMenu = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+		const result1 = patcher.patch({ menuColors: firstMenu }, '/tmp/test_seq_menu_flac1.IMG', true);
+		expect(result1.success).toBe(true);
+
+		// Second: FLAC-only (Menu should keep first Menu)
+		const patched1 = fileIO.readFileSync('/tmp/test_seq_menu_flac1.IMG');
+		const patcher2 = new ThemePatcher(patched1);
+
+		const newFlac = [0xF800, 0x07E0, 0x001F, 0xFFE0, 0x8410];
+		const result2 = patcher2.patch({ flacColors: newFlac }, '/tmp/test_seq_menu_flac2.IMG', true);
+		expect(result2.success).toBe(true);
+
+		// Verify: new FLAC, first Menu unchanged
+		const patched2 = fileIO.readFileSync('/tmp/test_seq_menu_flac2.IMG');
+		const detector = new PatchDetector(patched2, 'test');
+
+		if (result2.nopSlide) {
+			const metadata = detector.readPatchMetadata(result2.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(newFlac); // New FLAC
+				expect(metadata.menuColors).toEqual(firstMenu); // First Menu unchanged
+			}
+		}
+	});
+
+	it('should support patching Menu-only then Both (Menu → Both)', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// First: Menu-only
+		const firstMenu = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+		const result1 = patcher.patch({ menuColors: firstMenu }, '/tmp/test_seq_menu_both1.IMG', true);
+		expect(result1.success).toBe(true);
+
+		// Second: Both (new FLAC, new Menu)
+		const patched1 = fileIO.readFileSync('/tmp/test_seq_menu_both1.IMG');
+		const patcher2 = new ThemePatcher(patched1);
+
+		const newFlac = [0xF800, 0x07E0, 0x001F, 0xFFE0, 0x8410];
+		const secondMenu = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114];
+		const result2 = patcher2.patch({ flacColors: newFlac, menuColors: secondMenu }, '/tmp/test_seq_menu_both2.IMG', true);
+		expect(result2.success).toBe(true);
+
+		// Verify: new FLAC, second Menu
+		const patched2 = fileIO.readFileSync('/tmp/test_seq_menu_both2.IMG');
+		const detector = new PatchDetector(patched2, 'test');
+
+		if (result2.nopSlide) {
+			const metadata = detector.readPatchMetadata(result2.nopSlide);
+			expect(metadata).not.toBeNull();
+			if (metadata) {
+				expect(metadata.flacColors).toEqual(newFlac); // New FLAC
+				expect(metadata.menuColors).toEqual(secondMenu); // Second Menu
+			}
+		}
+	});
+
+	it('should reject patch when neither FLAC nor Menu colors are provided', () => {
+		const firmwareData = fileIO.readFileSync('references/HIFIEC10.IMG');
+		const patcher = new ThemePatcher(firmwareData);
+
+		// Should throw - at least one color set must be provided
+		expect(() => {
+			patcher.patch({}, '/tmp/test_partial_error.IMG', true);
+		}).toThrow(ValidationError);
 	});
 });
 
@@ -868,7 +1204,7 @@ describe('Theme Patcher - Batch Firmware Testing', () => {
 						const flacColors = [0xf800, 0x001f, 0xffe0, 0x07ff, 0x0000];
 						const menuColors = Array(15).fill(0xf800);
 
-						const result = patcher.patch(flacColors, menuColors, `/tmp/${version}.patched.IMG`, true);
+						const result = patcher.patch({ flacColors, menuColors }, `/tmp/${version}.patched.IMG`, true);
 
 						expect(result.success).toBe(true);
 					});
