@@ -58,6 +58,8 @@ export interface ThemeFunction {
 	readonly colorWrites: readonly ColorWrite[];
 	/** Preloaded colors found by pattern matching */
 	readonly preloadColors: Readonly<Record<number, number>>;
+	/** MOVW instructions for preloaded colors (theme index -> MOVW record) */
+	readonly preloadMovwRecords: Readonly<Record<number, MovwRecord>>;
 	/** UI element this function controls */
 	uiElement: string;
 	/** Register that holds the theme value (default: 0 for R0) */

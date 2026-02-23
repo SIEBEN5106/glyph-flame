@@ -370,6 +370,7 @@ export class ThemeDiscovery {
 						const cmpStart = consecutive[0].addr;
 						const funcEnd = consecutive[consecutive.length - 1].addr + 100;
 						const preloadColors: Record<number, number> = {};
+						const preloadMovwRecords: Record<number, import('./types.js').MovwRecord> = {};
 
 						let colorIdx = 0;
 						for (let addr = cmpStart; addr < funcEnd && addr + 4 <= data.length;) {
@@ -387,7 +388,17 @@ export class ThemeDiscovery {
 
 								// Only collect MOVW to R0 (color register)
 								if (rd === 0) {
-									preloadColors[colorIdx++] = imm16;
+									preloadColors[colorIdx] = imm16;
+									// Decode the MOVW instruction for detailed tracking
+									const instr = this.decoder.decode(addr);
+									preloadMovwRecords[colorIdx] = {
+										addr,
+										instr,
+										colorValue: imm16,
+										targetReg: rd,
+										themeCondition: null
+									};
+									colorIdx++;
 								}
 								addr += 4;
 							} else {
@@ -421,6 +432,7 @@ export class ThemeDiscovery {
 							type: funcType,
 							colorWrites: [],
 							preloadColors,
+							preloadMovwRecords,
 							uiElement
 						});
 					}
@@ -510,6 +522,7 @@ export class ThemeDiscovery {
 					type: 'flac',
 					colorWrites: [],
 					preloadColors: {},
+					preloadMovwRecords: {},
 					uiElement: flacBehavior.type !== 'unknown' ? 'FLAC String Text' : 'Unknown UI Element',
 					themeRegister: 1 // FLAC uses R1 for theme value
 				});
@@ -532,6 +545,7 @@ export class ThemeDiscovery {
 					type: 'menu',
 					colorWrites: [],
 					preloadColors: {},
+					preloadMovwRecords: {},
 					uiElement: 'Menu Text Colors'
 				});
 			}

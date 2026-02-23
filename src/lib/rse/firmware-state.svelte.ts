@@ -475,13 +475,22 @@ export class FirmwareState {
           // Progress Bar uses preloadColors (switch_case pattern)
           for (let themeId = 0; themeId < 5; themeId++) {
             const color = func.preloadColors[themeId] ?? 0;
+            const movwRecord = func.preloadMovwRecords?.[themeId];
+
+            let movwAddr: string | undefined;
+            let movwInstr: string | undefined;
+            if (movwRecord) {
+              movwAddr = '0x' + movwRecord.addr.toString(16).toUpperCase().padStart(5, '0');
+              movwInstr = `${movwRecord.instr.mnemonic} ${movwRecord.instr.operands}`;
+            }
+
             progressColorEntries.push({
               semantic: 'Progress Bar',
               color: color,
               themeId: themeId,
               register: undefined,
-              movwAddress: undefined,
-              movwInstruction: undefined,
+              movwAddress: movwAddr,
+              movwInstruction: movwInstr,
               strhAddress: undefined,
               strhInstruction: undefined,
               isPatched: false
@@ -493,13 +502,22 @@ export class FirmwareState {
           // Marquee Overlay uses preloadColors (switch_case pattern)
           for (let themeId = 0; themeId < 5; themeId++) {
             const color = func.preloadColors[themeId] ?? 0;
+            const movwRecord = func.preloadMovwRecords?.[themeId];
+
+            let movwAddr: string | undefined;
+            let movwInstr: string | undefined;
+            if (movwRecord) {
+              movwAddr = '0x' + movwRecord.addr.toString(16).toUpperCase().padStart(5, '0');
+              movwInstr = `${movwRecord.instr.mnemonic} ${movwRecord.instr.operands}`;
+            }
+
             marqueeColorEntries.push({
               semantic: 'Marquee Overlay',
               color: color,
               themeId: themeId,
               register: undefined,
-              movwAddress: undefined,
-              movwInstruction: undefined,
+              movwAddress: movwAddr,
+              movwInstruction: movwInstr,
               strhAddress: undefined,
               strhInstruction: undefined,
               isPatched: false
