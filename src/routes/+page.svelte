@@ -596,7 +596,6 @@
 
   .content-panel {
     padding-left: 8px;
-    padding-top: 8px;
     overflow: hidden;
     height: 100%;
     display: flex;
