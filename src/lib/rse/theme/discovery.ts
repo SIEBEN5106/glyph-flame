@@ -423,25 +423,6 @@ export class ThemeDiscovery {
 }
 
 /**
- * Known patch addresses for specific firmware versions
- * These are the addresses where patches are applied in patched firmware
- */
-interface KnownPatchAddress {
-	readonly version: string;
-	readonly flacPatchAddr: number;
-	readonly menuPatchAddr: number;
-}
-
-const KNOWN_PATCH_ADDRESSES: KnownPatchAddress[] = [
-	// ECHO MINI V3.1.0
-	{
-		version: 'V3.1.0',
-		flacPatchAddr: 0x86CB0,
-		menuPatchAddr: 0x3F870
-	}
-];
-
-/**
  * Check if data at address is a BL instruction
  */
 function isBlInstruction(data: Uint8Array, addr: number): boolean {
@@ -454,24 +435,18 @@ function isBlInstruction(data: Uint8Array, addr: number): boolean {
 /**
  * Discover FLAC function using default parameters
  *
- * For patched firmware, checks known patch addresses for BL instructions FIRST.
- * For unpatched firmware, falls back to searching for CMP+ITE pattern.
+ * First tries signature-based detection for patched firmware, then falls back to
+ * CMP+ITE pattern search for unpatched firmware.
  */
 export function discoverFlacFunction(data: Uint8Array, version?: string): [number, number] | null {
-	// First, check known patch addresses for BL instructions (for patched firmware)
-	// If version is 'Unknown' or not specified, check all known addresses
-	const shouldCheckAll = !version || version === 'Unknown';
-
-	for (const known of KNOWN_PATCH_ADDRESSES) {
-		if (shouldCheckAll || known.version === version) {
-			const addr = known.flacPatchAddr;
-			if (addr + 4 <= data.length && isBlInstruction(data, addr)) {
-				return [addr, addr];
-			}
-		}
+	// Try signature-based detection first (for patched firmware)
+	const patches = discoverPatchesBySignature(data);
+	if (patches) {
+		// For patched firmware, both funcAddr and patchAddr are the BL address
+		return [patches.flacBlAddr, patches.flacBlAddr];
 	}
 
-	// Fall back to the standard CMP+ITE pattern search (for unpatched firmware)
+	// Fall back to CMP+ITE pattern search (for unpatched firmware)
 	const result = ThemeDiscovery.detectFlacFunction(data);
 	if (result) {
 		return result;
@@ -483,24 +458,18 @@ export function discoverFlacFunction(data: Uint8Array, version?: string): [numbe
 /**
  * Discover Menu function using default parameters
  *
- * For patched firmware, checks known patch addresses for BL instructions FIRST.
- * For unpatched firmware, falls back to searching for MOV.W pattern.
+ * First tries signature-based detection for patched firmware, then falls back to
+ * MOV.W pattern search for unpatched firmware.
  */
 export function discoverMenuFunction(data: Uint8Array, version?: string): [number, number] | null {
-	// First, check known patch addresses for BL instructions (for patched firmware)
-	// If version is 'Unknown' or not specified, check all known addresses
-	const shouldCheckAll = !version || version === 'Unknown';
-
-	for (const known of KNOWN_PATCH_ADDRESSES) {
-		if (shouldCheckAll || known.version === version) {
-			const addr = known.menuPatchAddr;
-			if (addr + 4 <= data.length && isBlInstruction(data, addr)) {
-				return [addr, addr];
-			}
-		}
+	// Try signature-based detection first (for patched firmware)
+	const patches = discoverPatchesBySignature(data);
+	if (patches) {
+		// For patched firmware, both funcAddr and patchAddr are the BL address
+		return [patches.menuBlAddr, patches.menuBlAddr];
 	}
 
-	// Fall back to the standard MOV.W pattern search (for unpatched firmware)
+	// Fall back to MOV.W pattern search (for unpatched firmware)
 	const result = ThemeDiscovery.detectMenuFunction(data);
 	if (result) {
 		return result;
@@ -514,4 +483,125 @@ export function discoverMenuFunction(data: Uint8Array, version?: string): [numbe
  */
 export function findFunctionStart(data: Uint8Array, addr: number): number {
 	return ThemeDiscovery.findFunctionStart(data, addr);
+}
+
+/**
+ * Check if code at addr has the signature of our generated patch code.
+ *
+ * Our patch code has distinctive MOVW/MOVT instruction pairs in sequence.
+ * Normal firmware code rarely has this pattern.
+ */
+function isPatchCodeSignature(data: Uint8Array, addr: number): boolean {
+	if (addr + 64 > data.length) return false;
+
+	// Count MOVW/MOVT pairs (MOVW followed by MOVT for same register)
+	let pairCount = 0;
+
+	// Iterate by 4 bytes since MOVW/MOVT are 32-bit instructions
+	for (let i = addr; i < Math.min(addr + 64, data.length - 7); i += 4) {
+		const hw1 = data[i] | (data[i + 1] << 8);
+		const hw2 = data[i + 2] | (data[i + 3] << 8);
+
+		// Check if first instruction is MOVW
+		if ((hw1 & 0xf800) === 0xf000) {
+			const opcode1 = (hw1 >> 4) & 0xf;
+			if (opcode1 === 0x4) {  // MOVW
+				const rd1 = (hw2 >> 8) & 0xf;
+
+				// Check if next instruction is MOVT for same register
+				const hw1Next = data[i + 4] | (data[i + 5] << 8);
+				const hw2Next = data[i + 6] | (data[i + 7] << 8);
+
+				if ((hw1Next & 0xf800) === 0xf000) {
+					const opcode2 = (hw1Next >> 4) & 0xf;
+					if (opcode2 === 0xc) {  // MOVT
+						const rd2 = (hw2Next >> 8) & 0xf;
+						if (rd1 === rd2) {  // Same register = MOVW/MOVT pair
+							pairCount++;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Our patch code has 6+ MOVW/MOVT pairs in first 64 bytes
+	return pairCount >= 6;
+}
+
+/**
+ * Decode BL instruction target address.
+ */
+function decodeBlTarget(data: Uint8Array, addr: number): number {
+	const hw1 = data[addr] | (data[addr + 1] << 8);
+	const hw2 = data[addr + 2] | (data[addr + 3] << 8);
+
+	const S = (hw1 >> 10) & 1;
+	const J1 = (hw2 >> 13) & 1;
+	const J2 = (hw2 >> 11) & 1;
+	const imm10 = hw1 & 0x3ff;
+	const imm11 = hw2 & 0x7ff;
+
+	const I1 = (~(J1 ^ S)) & 1;
+	const I2 = (~(J2 ^ S)) & 1;
+
+	const imm25 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | (imm11 << 1);
+	let imm32 = imm25 << 1;
+
+	if (S) {
+		imm32 |= 0xfe000000;
+	}
+
+	return addr + 4 + imm32;
+}
+
+/**
+ * Discover patches by searching for BL instructions that branch to our patch code.
+ *
+ * Returns both the BL addresses and the NOP slide address if found.
+ */
+export function discoverPatchesBySignature(data: Uint8Array): {
+	flacBlAddr: number;
+	menuBlAddr: number;
+	nopSlideAddr: number;
+} | null {
+	const blInstructions: Array<{ blAddr: number; target: number }> = [];
+
+	// Find all BL instructions
+	for (let i = 0; i < data.length - 4; i += 2) {
+		const hw1 = data[i] | (data[i + 1] << 8);
+		const hw2 = data[i + 2] | (data[i + 3] << 8);
+
+		if ((hw1 & 0xf800) === 0xf000 && (hw2 & 0xd000) === 0xd000) {
+			const target = decodeBlTarget(data, i);
+			if (target >= 0 && target < data.length) {
+				// Check if target has our patch code signature
+				if (isPatchCodeSignature(data, target)) {
+					blInstructions.push({ blAddr: i, target });
+				}
+			}
+		}
+	}
+
+	// We should have exactly 2 BLs pointing to our patch code (FLAC and Menu)
+	if (blInstructions.length >= 2) {
+		// Sort by target address (FLAC is usually first)
+		blInstructions.sort((a, b) => a.target - b.target);
+
+		const flacBl = blInstructions[0].blAddr;
+		const nopSlide = blInstructions[0].target;
+
+		// Menu BL should be the second one (higher target address within same NOP slide)
+		let menuBl = 0;
+		for (const { blAddr, target } of blInstructions.slice(1)) {
+			if (Math.abs(target - nopSlide) < 1024) {  // Same NOP slide
+				menuBl = blAddr;
+				break;
+			}
+		}
+
+		return { flacBlAddr: flacBl, menuBlAddr: menuBl, nopSlideAddr: nopSlide };
+	}
+
+	return null;
 }

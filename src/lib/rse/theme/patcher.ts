@@ -10,7 +10,7 @@ import { fileIO } from '../utils/file-io.js';
 import { NopSlideFinder } from './nop-slide.js';
 import { PatchDetector } from './detector.js';
 import { createPatchMetadata, writePatchMetadata } from './metadata.js';
-import { discoverFlacFunction, discoverMenuFunction, findFunctionStart } from './discovery.js';
+import { discoverFlacFunction, discoverMenuFunction, findFunctionStart, discoverPatchesBySignature } from './discovery.js';
 import {
 	type PatchResult,
 	type PatchPoint,
@@ -98,52 +98,27 @@ export class ThemePatcher {
 	/**
 	 * Find existing NOP slide from patched firmware
 	 *
-	 * Decodes BL instructions to find the NOP slide boundaries
+	 * Uses signature-based discovery to find our patch code and NOP slide.
 	 */
 	private findExistingNopSlide(): NopSlide | null {
-		const flacResult = discoverFlacFunction(this.data, this.version);
-		const menuResult = discoverMenuFunction(this.data, this.version);
-
-		if (!flacResult || !menuResult) {
+		// Use signature-based discovery to find existing patches
+		const patches = discoverPatchesBySignature(this.data);
+		if (!patches) {
 			return null;
 		}
 
-		const [, flacPatchAddr] = flacResult;
-		const [, menuPatchAddr] = menuResult;
+		const { nopSlideAddr } = patches;
 
-		// Check if both have BL instructions (indicating patched firmware)
-		const flacIsBl = this.detector.isBlInstruction(flacPatchAddr);
-		const menuIsBl = this.detector.isBlInstruction(menuPatchAddr);
-
-		if (!flacIsBl || !menuIsBl) {
-			return null;
-		}
-
-		// Decode BL targets to find NOP slide boundaries
-		const flacCodeStart = this.detector.decodeBlTarget(flacPatchAddr);
-		const menuCodeStart = this.detector.decodeBlTarget(menuPatchAddr);
-
-		// Both BLs should point to handlers within the same NOP slide
-		// The targets don't have to be identical - they're different handlers at different offsets
-		// Check if they're within a reasonable range (e.g., 1KB) of each other
-		const MAX_NOP_SLIDE_SIZE = 1024;
-
-		if (Math.abs(flacCodeStart - menuCodeStart) > MAX_NOP_SLIDE_SIZE) {
-			return null;  // Invalid patch state - targets should be in same NOP slide
-		}
-
-		// Use the FLAC code start as the NOP slide start (it's at the beginning)
 		// Find NOP slide boundaries by searching for NOP bytes (0x00)
 		// Start from the code location and search backward to find the start
-		let start = flacCodeStart;
+		let start = nopSlideAddr;
 		while (start > 0 && this.data[start - 1] === 0x00) {
 			start--;
 		}
 
-		// For the end, we can't search forward from flacCodeStart because the handler
-		// code has overwritten the NOP bytes. Instead, search forward from a location
-		// well beyond the handler code (handlers are typically < 512 bytes)
-		let end = flacCodeStart + 512;
+		// For the end, search forward from beyond the handler code
+		// (handlers are typically < 512 bytes)
+		let end = nopSlideAddr + 512;
 		while (end < this.data.length && this.data[end] === 0x00) {
 			end++;
 		}
