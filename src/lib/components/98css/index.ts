@@ -12,6 +12,7 @@ export { default as StatusBar } from './StatusBar.svelte';
 export { default as TreeView } from './TreeView.svelte';
 export { default as Tabs } from './Tabs.svelte';
 export { default as TableView } from './TableView.svelte';
+export type { TableRow, TableCell } from './TableView.svelte';
 export { default as ProgressBar } from './ProgressBar.svelte';
 export { default as FieldBorder } from './FieldBorder.svelte';
 export { default as LoadingWindow } from './LoadingWindow.svelte';

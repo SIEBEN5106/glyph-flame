@@ -2,12 +2,13 @@
 	import type { ClassValue } from 'svelte/elements';
 	import { clsx } from 'clsx';
 
-	interface TableCell {
+	export interface TableCell {
 		content: string;
 		class?: ClassValue;
+		style?: string;
 	}
 
-	interface TableRow {
+	export interface TableRow {
 		cells: TableCell[];
 		class?: ClassValue;
 		highlighted?: boolean;
@@ -21,6 +22,7 @@
 		interactive?: boolean;
 		selectedRow?: string | null;
 		onSelect?: (rowKey: string | null) => void;
+		onRowDoubleClick?: (rowKey: string) => void;
 		height?: string;
 		width?: string;
 	}
@@ -32,6 +34,7 @@
 		interactive = false,
 		selectedRow = $bindable(null as string | null),
 		onSelect,
+		onRowDoubleClick,
 		height = '120px',
 		width = '240px'
 	}: Props = $props();
@@ -45,6 +48,11 @@
 			selectedRow = rowKey;
 		}
 		onSelect?.(selectedRow);
+	}
+
+	function handleRowDoubleClick(rowKey: string): void {
+		if (!interactive) return;
+		onRowDoubleClick?.(rowKey);
 	}
 
 	function isRowHighlighted(row: TableRow): boolean {
@@ -70,9 +78,10 @@
 					class={row.class}
 					class:highlighted={isRowHighlighted(row)}
 					onclick={() => row.key && handleRowClick(row.key)}
+					ondblclick={() => row.key && handleRowDoubleClick(row.key)}
 				>
 					{#each row.cells as cell}
-						<td class={cell.class}>{cell.content}</td>
+						<td class={cell.class} style={cell.style}>{cell.content}</td>
 					{/each}
 				</tr>
 			{/each}

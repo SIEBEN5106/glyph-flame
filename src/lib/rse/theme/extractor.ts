@@ -11,7 +11,6 @@ import { ControlFlowSimulator } from './simulator.js';
 import { BehaviorAnalyzer } from './behavior.js';
 import { createColorMap, type ThemeFunction, type AnalysisResult, type FlacBehavior } from './types.js';
 import {
-	ThemeError,
 	NotFoundError,
 	AnalysisError,
 	throwThemeError
@@ -67,20 +66,33 @@ export class ThemeColorExtractor {
 			const mergedColors = createColorMap();
 
 			for (const func of functions) {
-				const simulator = new ControlFlowSimulator(this.decoder);
-				const [registers] = simulator.simulate(
-					func.addr,
-					func.endAddr || func.addr + 500,
-					4
-				);
-
-				// Extract colors from registers (R4-R8 for FLAC, R0-R14 for Menu)
-				for (const [reg, value] of registers.entries()) {
-					if (value !== 0) {
+				// For switch_case patterns (Progress Bar and Marquee), extract from preloadColors
+				if (func.patternType === 'switch_case' && func.preloadColors) {
+					// Extract colors from preloadColors (already organized by theme index)
+					for (const [idx, color] of Object.entries(func.preloadColors)) {
+						const reg = parseInt(idx, 10);
 						if (!mergedColors.has(reg)) {
 							mergedColors.set(reg, []);
 						}
-						mergedColors.get(reg)!.push(value);
+						mergedColors.get(reg)!.push(color);
+					}
+				} else {
+					// For FLAC and Menu, use control flow simulation
+					const simulator = new ControlFlowSimulator(this.decoder);
+					const [registers] = simulator.simulate(
+						func.addr,
+						func.endAddr || func.addr + 500,
+						4
+					);
+
+					// Extract colors from registers (R4-R8 for FLAC, R0-R14 for Menu)
+					for (const [reg, value] of registers.entries()) {
+						if (value !== 0) {
+							if (!mergedColors.has(reg)) {
+								mergedColors.set(reg, []);
+							}
+							mergedColors.get(reg)!.push(value);
+						}
 					}
 				}
 			}
@@ -126,7 +138,7 @@ export class ThemeColorExtractor {
 	/**
 	 * Get specific colors for a function type
 	 */
-	getColorsForFunction(funcType: 'flac' | 'menu'): number[] {
+	getColorsForFunction(funcType: 'flac' | 'menu' | 'progress' | 'marquee'): number[] {
 		const result = this.extract();
 		const func = result.themeFunctions.find(f => f.type === funcType);
 
@@ -134,6 +146,17 @@ export class ThemeColorExtractor {
 			throw new NotFoundError(`${funcType} function not found`);
 		}
 
+		// For switch_case patterns (progress, marquee), extract from preloadColors
+		if (func.patternType === 'switch_case' && func.preloadColors) {
+			const colors: number[] = [];
+			// Colors are indexed 0-4 in preloadColors
+			for (let i = 0; i < 5; i++) {
+				colors.push(func.preloadColors[i] || 0);
+			}
+			return colors;
+		}
+
+		// For FLAC and Menu, use control flow simulation
 		const simulator = new ControlFlowSimulator(this.decoder);
 		const [registers] = simulator.simulate(
 			func.addr,

@@ -3,6 +3,8 @@
   import ImageRenderer from "$lib/components/firmware/ImageRenderer.svelte";
   import FontGridRenderer from "$lib/components/firmware/FontGridRenderer.svelte";
   import SequenceReplacerWindow from "$lib/components/firmware/SequenceReplacerWindow.svelte";
+  import ColorTable from "$lib/components/firmware/ColorTable.svelte";
+  import ColorDetailWindow from "$lib/components/firmware/ColorDetailWindow.svelte";
   import { initDebugShortcut } from "$lib/stores";
   import {
     Window,
@@ -290,6 +292,35 @@
                     rgb565Data={fwState.imageData.rgb565Data}
                     zoom={2}
                   />
+                {:else if fwState.selectedNode.type === "colors" && fwState.colorData}
+                  <div class="colors-container">
+                    {#if fwState.selectedNode.label.includes('General Text') || fwState.selectedNode.id === 'colors-menu'}
+                      {#if fwState.colorData.menuColors.length > 0}
+                        <ColorTable
+                          entries={fwState.colorData.menuColors}
+                          title="General Text Colors (Menu Text)"
+                          height="100%"
+                          onDoubleClick={(entry) => fwState.openColorDetail(entry)}
+                        />
+                      {:else}
+                        <div class="empty-state"><p>No menu colors found (0 entries)</p></div>
+                      {/if}
+                    {:else if fwState.selectedNode.label.includes('Codec') || fwState.selectedNode.id === 'colors-flac'}
+                      <ColorTable
+                        entries={fwState.colorData.flacColors}
+                        title="Codec Information Color (FLAC String)"
+                        height="100%"
+                        onDoubleClick={(entry) => fwState.openColorDetail(entry)}
+                      />
+                    {:else}
+                      <ColorTable
+                        entries={[...fwState.colorData.menuColors, ...fwState.colorData.flacColors]}
+                        title="All Colors"
+                        height="100%"
+                        onDoubleClick={(entry) => fwState.openColorDetail(entry)}
+                      />
+                    {/if}
+                  </div>
                 {:else}
                   <div class="empty-state"><p>No data available</p></div>
                 {/if}
@@ -351,6 +382,13 @@
       debugImages={fwState.pendingFontConfirmation.debugImages}
       oncancel={() => fwState.handleFontSizeCancel()}
       onconfirm={(type) => fwState.handleFontSizeConfirm(type)}
+    />
+  {/if}
+
+  {#if fwState.showColorDetail && fwState.selectedColorDetail}
+    <ColorDetailWindow
+      detail={fwState.selectedColorDetail}
+      onclose={() => (fwState.showColorDetail = false)}
     />
   {/if}
 </div>
@@ -567,5 +605,12 @@
     flex: 1 1 0;
     min-height: 0;
     box-sizing: border-box;
+  }
+
+  .colors-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow-y: auto;
   }
 </style>

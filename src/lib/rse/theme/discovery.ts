@@ -307,6 +307,185 @@ export class ThemeDiscovery {
 	}
 
 	/**
+	 * Detect switch_case pattern functions (Progress Bar and Marquee)
+	 *
+	 * Scans for CMP R0, #0-4 sequences followed by MOVW color loads.
+	 * Distinguishes Progress Bar (has STRH) from Marquee (no STRH).
+	 */
+	detectSwitchCasePatterns(data: Uint8Array, seenAddrs: Set<number>): ThemeFunction[] {
+		const functions: ThemeFunction[] = [];
+		const searchEnd = Math.min(0x100000, data.length);
+
+		// Collect CMP R0, #0-9 candidates
+		const cmpCandidates: Array<{ addr: number; imm: number }> = [];
+
+		for (let addr = 0; addr < searchEnd; addr += 2) {
+			const hw = data[addr] | (data[addr + 1] << 8);
+
+			// 16-bit CMP R0, #imm8: Encoding 00101 Rn imm8 (bits[15:11] = 00101)
+			if ((hw >> 11) === 0b00101) {
+				const rd = (hw >> 8) & 0x7;
+				const imm = hw & 0xff;
+				if (rd === 0 && imm < 10) {
+					cmpCandidates.push({ addr, imm });
+				}
+			}
+			// 32-bit CMP.W R0, #imm: F1BC 0Fxx
+			else if (hw === 0xF1BC) {
+				const hw2 = data[addr + 2] | (data[addr + 3] << 8);
+				if ((hw2 & 0xFF00) === 0x0F00) {
+					const imm = hw2 & 0xFF;
+					if (imm < 10) {
+						cmpCandidates.push({ addr, imm });
+					}
+				}
+			}
+		}
+
+		// Group consecutive CMPs (within 20 bytes)
+		let i = 0;
+		while (i < cmpCandidates.length) {
+			const consecutive = [cmpCandidates[i]];
+			let j = i + 1;
+
+			while (j < cmpCandidates.length) {
+				if (cmpCandidates[j].addr - consecutive[consecutive.length - 1].addr <= 20) {
+					consecutive.push(cmpCandidates[j]);
+					j++;
+				} else {
+					break;
+				}
+			}
+
+			// Need at least 3 consecutive CMPs with different immediates (0-4)
+			if (consecutive.length >= 3) {
+				const imms = new Set(consecutive.map(c => c.imm));
+				if (imms.size >= 3 && Array.from(imms).every(v => v <= 4)) {
+					const funcStart = ThemeDiscovery.findFunctionStart(data, consecutive[0].addr);
+
+					if (funcStart && !seenAddrs.has(funcStart)) {
+						seenAddrs.add(funcStart);
+
+						// Collect MOVW color values from function
+						const cmpStart = consecutive[0].addr;
+						const funcEnd = consecutive[consecutive.length - 1].addr + 100;
+						const preloadColors: Record<number, number> = {};
+
+						let colorIdx = 0;
+						for (let addr = cmpStart; addr < funcEnd && addr + 4 <= data.length;) {
+							const hw = data[addr] | (data[addr + 1] << 8);
+
+							// Check if MOVW (32-bit): (hw & 0xFBF0) == 0xF240
+							if ((hw & 0xFBF0) === 0xF240) {
+								const hw2 = data[addr + 2] | (data[addr + 3] << 8);
+								const imm4 = hw & 0xF;
+								const iBit = (hw >> 10) & 1;
+								const imm3 = (hw2 >> 12) & 0x7;
+								const rd = (hw2 >> 8) & 0xF;
+								const imm8 = hw2 & 0xFF;
+								const imm16 = (iBit << 11) | (imm4 << 12) | (imm3 << 8) | imm8;
+
+								// Only collect MOVW to R0 (color register)
+								if (rd === 0) {
+									preloadColors[colorIdx++] = imm16;
+								}
+								addr += 4;
+							} else {
+								// Check if 32-bit instruction
+								const is32bit = hw >= 0xe800;
+								addr += is32bit ? 4 : 2;
+							}
+						}
+
+						// Analyze behavior to determine UI element type
+						const behavior = this.analyzeSwitchCaseBehavior(funcStart);
+
+						// Distinguish Progress Bar vs Marquee by STRH presence
+						let uiElement = 'Unknown UI Element';
+						let funcType: 'progress' | 'marquee' | 'unknown' = 'unknown';
+
+						if (behavior.cmpR12Count >= 5 && behavior.distinctColors === 5) {
+							if (behavior.strhCount > 0) {
+								uiElement = 'Progress Bar Background';
+								funcType = 'progress';
+							} else {
+								uiElement = 'Marquee/Scrolling Text Overlay';
+								funcType = 'marquee';
+							}
+						}
+
+						functions.push({
+							addr: funcStart,
+							endAddr: funcEnd,
+							patternType: 'switch_case',
+							type: funcType,
+							colorWrites: [],
+							preloadColors,
+							uiElement
+						});
+					}
+				}
+			}
+
+			i = j > i + 1 ? j : i + 1;
+		}
+
+		return functions;
+	}
+
+	/**
+	 * Analyze switch_case function behavior to distinguish Progress Bar from Marquee
+	 */
+	private analyzeSwitchCaseBehavior(funcAddr: number): {
+		cmpR12Count: number;
+		distinctColors: number;
+		strhCount: number;
+		colors: Set<number>;
+	} {
+		const scanRange = 200;
+		const result = {
+			cmpR12Count: 0,
+			distinctColors: 0,
+			strhCount: 0,
+			colors: new Set<number>()
+		};
+
+		for (let offset = 0; offset < scanRange;) {
+			const hw = this.decoder.readU16(funcAddr + offset);
+			const is32bit = hw >= 0xe800;
+			const instr = this.decoder.decode(funcAddr + offset);
+			const mn = instr.mnemonic.toUpperCase();
+			const ops = instr.operands;
+
+			// Count CMP R12, #0-4
+			if (mn.includes('CMP') && ops.includes('R12')) {
+				const imm = instr.imm;
+				if (imm >= 0 && imm <= 4) {
+					result.cmpR12Count++;
+				}
+			}
+
+			// Count MOVW R0 color values
+			if (mn.includes('MOVW') && ops.includes('R0')) {
+				const imm = instr.imm;
+				if (imm !== undefined) {
+					result.colors.add(imm);
+				}
+			}
+
+			// Count STRH instructions
+			if (mn.includes('STRH')) {
+				result.strhCount++;
+			}
+
+			offset += is32bit ? 4 : 2;
+		}
+
+		result.distinctColors = result.colors.size;
+		return result;
+	}
+
+	/**
 	 * Find all theme functions in firmware
 	 */
 	scanFirmware(maxScanSize = 0x100000): ThemeFunction[] {
@@ -355,6 +534,12 @@ export class ThemeDiscovery {
 					uiElement: 'Menu Text Colors'
 				});
 			}
+		}
+
+		// Search for switch_case pattern functions (Progress Bar and Marquee)
+		const switchCaseFunctions = this.detectSwitchCasePatterns(data, seenAddrs);
+		for (const func of switchCaseFunctions) {
+			functions.push(func);
 		}
 
 		return functions;

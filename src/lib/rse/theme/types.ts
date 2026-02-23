@@ -53,7 +53,7 @@ export interface ThemeFunction {
 	/** Pattern type that identifies this function */
 	readonly patternType: PatternType;
 	/** Function type shorthand */
-	readonly type?: 'flac' | 'menu' | 'unknown';
+	readonly type?: 'flac' | 'menu' | 'progress' | 'marquee' | 'unknown';
 	/** All color writes found in this function */
 	readonly colorWrites: readonly ColorWrite[];
 	/** Preloaded colors found by pattern matching */
@@ -208,7 +208,7 @@ export interface NopSlide {
  */
 export interface PatchPoint {
 	/** Function type */
-	readonly type?: 'flac' | 'menu';
+	readonly type?: 'flac' | 'menu' | 'progress' | 'marquee';
 	/** Function address */
 	readonly funcAddr: number;
 	/** Patch address (where BL is inserted) */
@@ -258,8 +258,8 @@ export interface PatchResult {
  * Patch point info - simplified patch point info for analysis
  */
 export interface PatchPointInfo {
-	/** Function type (flac/menu) */
-	readonly type: 'flac' | 'menu';
+	/** Function type (flac/menu/progress/marquee) */
+	readonly type: 'flac' | 'menu' | 'progress' | 'marquee';
 	/** Function address */
 	readonly funcAddr: number;
 	/** Patch address */
@@ -343,6 +343,26 @@ export function isMenuFunction(func: ThemeFunction): boolean {
 	return (
 		func.patternType === 'preload_store' &&
 		(func.uiElement.includes('Menu') || func.uiElement === 'Unknown UI Element')
+	);
+}
+
+/**
+ * Check if function is a Progress Bar function
+ */
+export function isProgressFunction(func: ThemeFunction): boolean {
+	return (
+		func.patternType === 'switch_case' &&
+		(func.uiElement.includes('Progress Bar') || func.uiElement === 'Unknown UI Element')
+	);
+}
+
+/**
+ * Check if function is a Marquee Overlay function
+ */
+export function isMarqueeFunction(func: ThemeFunction): boolean {
+	return (
+		func.patternType === 'switch_case' &&
+		(func.uiElement.includes('Marquee') || func.uiElement === 'Unknown UI Element')
 	);
 }
 

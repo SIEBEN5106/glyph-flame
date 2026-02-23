@@ -16,6 +16,7 @@ import { detectTofu } from "$lib/rse/utils/tofu-detector";
 import { imageToRgb565 } from "$lib/rse/utils/bitmap";
 import { UNICODE_RANGES } from "$lib/rse/utils/unicode-ranges";
 import { debugMode, debugAnimationComplete } from "$lib/stores";
+import { extractThemeColors } from "$lib/rse/theme";
 
 // Types
 export interface FontPlaneInfo {
@@ -39,9 +40,24 @@ export interface BitmapFileInfo {
 export interface TreeNode {
   id: string;
   label: string;
-  type: "folder" | "font-type" | "plane" | "image";
+  type: "folder" | "font-type" | "plane" | "image" | "colors";
   data?: FontPlaneInfo | BitmapFileInfo;
   children?: TreeNode[];
+}
+
+export interface ColorEntry {
+  semantic: string;
+  color: number;
+  themeId?: number;
+  register?: number;
+  instruction?: string;
+  address?: string;
+  rawBytes?: number[];
+  movwInstruction?: string;
+  movwAddress?: string;
+  strhInstruction?: string;
+  strhAddress?: string;
+  isPatched?: boolean;
 }
 
 export interface SequenceReplacement {
@@ -81,6 +97,16 @@ export class FirmwareState {
     height: number;
     rgb565Data: Uint8Array;
   } | null>(null);
+
+  // Color data state
+  colorData = $state<{
+    menuColors: ColorEntry[];
+    flacColors: ColorEntry[];
+  } | null>(null);
+
+  // Color detail window state
+  showColorDetail = $state(false);
+  selectedColorDetail = $state<ColorEntry | null>(null);
 
   // Warning dialog state
   showWarning = $state(false);
@@ -265,11 +291,220 @@ export class FirmwareState {
     } else {
       this.treeNodes = [...this.treeNodes, imagesNode];
     }
+
+    // Build color tree after images (last async operation)
+    this.buildColorTree();
+  }
+
+  buildColorTree() {
+    if (!this.firmwareData) return;
+
+    try {
+      console.log('[buildColorTree] Starting color extraction...');
+      console.log('[buildColorTree] Firmware size:', this.firmwareData.length);
+
+      const result = extractThemeColors(this.firmwareData);
+      console.log('[buildColorTree] Extraction result:', {
+        themeFunctions: result.themeFunctions.length,
+        canPatch: result.canPatch,
+        hasColors: result.colors.size > 0,
+        colorsSize: result.colors.size,
+        themeFunctionsList: result.themeFunctions.map(f => ({ addr: '0x' + f.addr.toString(16), type: f.type, uiElement: f.uiElement }))
+      });
+
+      if (result.themeFunctions.length === 0) {
+        console.warn('[buildColorTree] No theme functions found');
+        return;
+      }
+
+      if (!result.canPatch) {
+        console.warn('[buildColorTree] Firmware cannot be patched');
+        return;
+      }
+
+      // Extract Menu colors (R0-R14 typically)
+      const menuColorEntries: ColorEntry[] = [];
+      const flacColorEntries: ColorEntry[] = [];
+
+      console.log('[buildColorTree] Analyzing theme functions:');
+      for (const func of result.themeFunctions) {
+        console.log('[buildColorTree] Function:', {
+          addr: '0x' + func.addr.toString(16),
+          type: func.type,
+          uiElement: func.uiElement,
+          patternType: func.patternType,
+          colorWritesCount: func.colorWrites.length,
+          preloadColorsKeys: Object.keys(func.preloadColors).length,
+          colorWrites: func.colorWrites.slice(0, 3), // First 3 for inspection
+          preloadColors: func.preloadColors
+        });
+      }
+
+      for (const func of result.themeFunctions) {
+        if (func.type === 'menu' || func.uiElement.includes('Menu')) {
+          // Extract colors from colorWrites (these have full instruction details)
+          for (const write of func.colorWrites) {
+            // Format instructions like Python version: 0x3F894: MOVW R6, #0x2945
+            const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+            const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+
+            let movwAddr: string | undefined;
+            let movwInstr: string | undefined;
+            if (write.movwInstr) {
+              movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
+              movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+            }
+
+            menuColorEntries.push({
+              semantic: `Menu Text - Theme ${write.themeCondition ?? '?'}`,
+              color: write.colorValue,
+              themeId: write.themeCondition ?? undefined,
+              register: write.sourceReg,
+              movwAddress: movwAddr,
+              movwInstruction: movwInstr,
+              strhAddress: strhAddr,
+              strhInstruction: strhInstr,
+              isPatched: false // Color writes are from unpatched code path
+            });
+          }
+        }
+
+        if (func.type === 'flac' || func.uiElement.includes('FLAC')) {
+          for (const write of func.colorWrites) {
+            const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+            const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+
+            let movwAddr: string | undefined;
+            let movwInstr: string | undefined;
+            if (write.movwInstr) {
+              movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
+              movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+            }
+
+            flacColorEntries.push({
+              semantic: `Codec Info - Theme ${write.themeCondition ?? '?'}`,
+              color: write.colorValue,
+              themeId: write.themeCondition ?? undefined,
+              register: write.sourceReg,
+              movwAddress: movwAddr,
+              movwInstruction: movwInstr,
+              strhAddress: strhAddr,
+              strhInstruction: strhInstr,
+              isPatched: false
+            });
+          }
+        }
+      }
+
+      console.log('[buildColorTree] Extracted colors from colorWrites:', {
+        menuEntries: menuColorEntries.length,
+        flacEntries: flacColorEntries.length
+      });
+
+      // Extract colors from colors map (for Menu colors)
+      // FLAC colors come from flacBehavior, not from colors map
+      console.log('[buildColorTree] Extracting Menu colors from colors map with', result.colors.size, 'registers');
+      for (const [reg, colors] of result.colors.entries()) {
+        // Menu uses registers R0-R14, but based on Python output mainly R1, R2, R3
+        // The colors are organized as 3 values per register (Primary, Secondary, Tertiary)
+        if (reg >= 0 && reg <= 14) {
+          console.log('[buildColorTree] Menu: Register', reg, 'has', colors.length, 'colors');
+          for (let i = 0; i < colors.length; i++) {
+            const themeId = Math.floor(i / 3);
+            const semanticLabels = ['Primary', 'Secondary', 'Tertiary'];
+
+            menuColorEntries.push({
+              semantic: `Menu Text - ${semanticLabels[i % 3]}`,
+              color: colors[i],
+              themeId,
+              register: reg
+            });
+          }
+        }
+      }
+
+      // Extract FLAC colors from flacBehavior
+      console.log('[buildColorTree] Extracting FLAC colors from flacBehavior:', result.flacBehavior);
+      if (result.flacBehavior.isFlac) {
+        // Themes 0-3 use colorForOther, theme 4 uses colorFor4
+        for (let themeId = 0; themeId < 5; themeId++) {
+          const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+          flacColorEntries.push({
+            semantic: `Codec Info - Theme ${themeId}`,
+            color: color,
+            themeId,
+            register: undefined
+          });
+        }
+        console.log('[buildColorTree] FLAC colors extracted:', flacColorEntries.length);
+      } else {
+        console.warn('[buildColorTree] FLAC behavior analysis failed to detect FLAC function');
+      }
+
+      console.log('[buildColorTree] After adding colors map, totals:', {
+        menuEntries: menuColorEntries.length,
+        flacEntries: flacColorEntries.length
+      });
+
+      // Remove duplicates
+      const uniqueMenuColors = this.deduplicateColors(menuColorEntries);
+      const uniqueFlacColors = this.deduplicateColors(flacColorEntries);
+
+      this.colorData = {
+        menuColors: uniqueMenuColors,
+        flacColors: uniqueFlacColors
+      };
+
+      console.log('[buildColorTree] Final colors:', {
+        menu: uniqueMenuColors.length,
+        flac: uniqueFlacColors.length
+      });
+
+      // Build color tree node (only Menu and FLAC colors exist in firmware)
+      const menuColorNode = {
+        id: 'colors-menu',
+        label: 'General Text Colors',
+        type: 'colors' as const,
+        children: []
+      };
+
+      const flacColorNode = {
+        id: 'colors-flac',
+        label: 'Codec Information Color',
+        type: 'colors' as const,
+        children: []
+      };
+
+      const colorsNode = {
+        id: 'colors',
+        label: 'Colors',
+        type: 'folder' as const,
+        children: [menuColorNode, flacColorNode]
+      };
+
+      // Add to tree nodes
+      this.treeNodes = [...this.treeNodes, colorsNode];
+      console.log('[buildColorTree] Colors node added. Total tree nodes:', this.treeNodes.length);
+    } catch (error) {
+      console.error('[buildColorTree] Failed to build color tree:', error);
+      // Don't add Colors node if extraction fails
+    }
+  }
+
+  deduplicateColors(entries: ColorEntry[]): ColorEntry[] {
+    const seen = new Set<string>();
+    return entries.filter(entry => {
+      const key = `${entry.semantic}-${entry.color}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   handleNodeClick(node: TreeNode) {
     if (this.isProcessing) return;
 
+    console.log('[handleNodeClick] Clicked node:', node.id, node.label, node.type);
     this.planeData = null;
     this.imageData = null;
     this.selectedNode = node;
@@ -283,7 +518,18 @@ export class FirmwareState {
         return;
       }
       this.loadImage(image);
+    } else if (node.type === "colors") {
+      // Color selection - colorData is already populated
+      console.log('[handleNodeClick] Colors node selected, colorData:', this.colorData);
+      console.log('[handleNodeClick] menuColors count:', this.colorData?.menuColors?.length ?? 0);
+      console.log('[handleNodeClick] flacColors count:', this.colorData?.flacColors?.length ?? 0);
+      this.statusMessage = `Viewing ${node.label}`;
     }
+  }
+
+  openColorDetail(entry: ColorEntry) {
+    this.selectedColorDetail = entry;
+    this.showColorDetail = true;
   }
 
   handleSelectNode(nodeId: string) {

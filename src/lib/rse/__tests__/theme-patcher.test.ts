@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	ThemePatcher,
+	ThemeColorExtractor,
 	encodeBl,
 	encodeB16bit,
 	encodeMovw,
@@ -580,6 +581,55 @@ describe('Theme Patcher - Batch Firmware Testing', () => {
 						const result = patcher.patch(flacColors, menuColors, `/tmp/${version}.patched.IMG`, true);
 
 						expect(result.success).toBe(true);
+					});
+
+					it('should extract progress and marquee colors', () => {
+						const firmwareData = fileIO.readFileSync(path);
+						const extractor = new ThemeColorExtractor(firmwareData);
+						const result = extractor.extract();
+
+						// Check that progress and marquee functions are discovered
+						const progressFunc = result.themeFunctions.find((f): f is typeof f & { type: 'progress' } => f.type === 'progress');
+						const marqueeFunc = result.themeFunctions.find((f): f is typeof f & { type: 'marquee' } => f.type === 'marquee');
+
+						// Progress Bar should be found
+						expect(progressFunc).toBeDefined();
+						if (progressFunc) {
+							expect(progressFunc.uiElement).toContain('Progress Bar');
+							expect(progressFunc.patternType).toBe('switch_case');
+							// Should have exactly 5 theme colors
+							expect(Object.keys(progressFunc.preloadColors).length).toBe(5);
+						}
+
+						// Marquee Overlay should be found
+						expect(marqueeFunc).toBeDefined();
+						if (marqueeFunc) {
+							expect(marqueeFunc.uiElement).toContain('Marquee');
+							expect(marqueeFunc.patternType).toBe('switch_case');
+							// Should have exactly 5 theme colors
+							expect(Object.keys(marqueeFunc.preloadColors).length).toBe(5);
+						}
+
+						// Test getColorsForFunction for progress and marquee
+						if (progressFunc) {
+							const progressColors = extractor.getColorsForFunction('progress');
+							expect(progressColors).toHaveLength(5);
+							// All colors should be valid 16-bit RGB565 values
+							for (const color of progressColors) {
+								expect(color).toBeGreaterThanOrEqual(0);
+								expect(color).toBeLessThanOrEqual(0xffff);
+							}
+						}
+
+						if (marqueeFunc) {
+							const marqueeColors = extractor.getColorsForFunction('marquee');
+							expect(marqueeColors).toHaveLength(5);
+							// All colors should be valid 16-bit RGB565 values
+							for (const color of marqueeColors) {
+								expect(color).toBeGreaterThanOrEqual(0);
+								expect(color).toBeLessThanOrEqual(0xffff);
+							}
+						}
 					});
 				});
 			}
