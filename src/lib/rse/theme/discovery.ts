@@ -9,6 +9,7 @@ import type { Instruction } from './thumb/index.js';
 import { ThumbDecoder } from './thumb/index.js';
 import type { ThemeFunction, FlacBehavior } from './types.js';
 import { DiscoveryError } from './errors.js';
+import { decodeBlTarget } from './thumb/encoders.js';
 
 /**
  * Pattern matching results for function discovery
@@ -731,32 +732,6 @@ function isPatchCodeSignature(data: Uint8Array, addr: number): boolean {
 }
 
 /**
- * Decode BL instruction target address.
- */
-function decodeBlTarget(data: Uint8Array, addr: number): number {
-	const hw1 = data[addr] | (data[addr + 1] << 8);
-	const hw2 = data[addr + 2] | (data[addr + 3] << 8);
-
-	const S = (hw1 >> 10) & 1;
-	const J1 = (hw2 >> 13) & 1;
-	const J2 = (hw2 >> 11) & 1;
-	const imm10 = hw1 & 0x3ff;
-	const imm11 = hw2 & 0x7ff;
-
-	const I1 = (~(J1 ^ S)) & 1;
-	const I2 = (~(J2 ^ S)) & 1;
-
-	const imm25 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | (imm11 << 1);
-	let imm32 = imm25 << 1;
-
-	if (S) {
-		imm32 |= 0xfe000000;
-	}
-
-	return addr + 4 + imm32;
-}
-
-/**
  * Discover patches by searching for BL instructions that branch to our patch code.
  *
  * Returns both the BL addresses and the NOP slide address if found.
@@ -774,7 +749,8 @@ export function discoverPatchesBySignature(data: Uint8Array): {
 		const hw2 = data[i + 2] | (data[i + 3] << 8);
 
 		if ((hw1 & 0xf800) === 0xf000 && (hw2 & 0xd000) === 0xd000) {
-			const target = decodeBlTarget(data, i);
+			const blBytes = data.slice(i, i + 4);
+			const target = decodeBlTarget(i, blBytes);
 			if (target >= 0 && target < data.length) {
 				// Check if target has our patch code signature
 				if (isPatchCodeSignature(data, target)) {
