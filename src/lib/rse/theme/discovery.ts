@@ -373,33 +373,66 @@ export class ThemeDiscovery {
 						const preloadColors: Record<number, number> = {};
 						const preloadMovwRecords: Record<number, import('./types.js').MovwRecord> = {};
 
-						let colorIdx = 0;
+						let lastCmpIndex = -1;
+						let lastCmpAddr = 0;
+						let beqTargetForColor0 = 0;
+
 						for (let addr = cmpStart; addr < funcEnd && addr + 4 <= data.length;) {
 							const hw = data[addr] | (data[addr + 1] << 8);
 
+							// Check for CMP.W R12, #imm (F1BC 0Fmm)
+							if (hw === 0xF1BC) {
+								const hw2_cmp = data[addr + 2] | (data[addr + 3] << 8);
+								if ((hw2_cmp & 0xFF00) === 0x0F00) {
+									const imm = hw2_cmp & 0xFF;
+									if (imm >= 0 && imm <= 4) {
+										lastCmpIndex = imm;
+										lastCmpAddr = addr;
+									}
+								}
+								addr += 4;
+								continue;
+							}
+
+							// Check for BEQ instruction (D0xx - 16-bit conditional branch)
+							if ((hw & 0xF000) === 0xD000 && lastCmpIndex === 0 && beqTargetForColor0 === 0) {
+								const offsetByte = hw & 0xFF;
+								const signedOffset = offsetByte < 128 ? offsetByte : offsetByte - 256;
+								beqTargetForColor0 = addr + 4 + (signedOffset * 2);
+							}
+
+							// Check if this address is the BEQ target for color 0
+							const isAtBeqTarget = addr === beqTargetForColor0 && beqTargetForColor0 > 0;
+
+							// Check if we're close to the last CMP (for colors 1-4)
+							const distFromCmp = addr - lastCmpAddr;
+							const isNearCmp = distFromCmp > 0 && distFromCmp <= 15;
+
 							// Check if MOVW (32-bit): (hw & 0xFBF0) == 0xF240
-							if ((hw & 0xFBF0) === 0xF240) {
+							if ((hw & 0xFBF0) === 0xF240 && (isNearCmp || isAtBeqTarget)) {
 								const hw2 = data[addr + 2] | (data[addr + 3] << 8);
-								const imm4 = hw & 0xF;
+								const imm4 = hw & 0xF;  // imm4 is in bits [3:0]
 								const iBit = (hw >> 10) & 1;
 								const imm3 = (hw2 >> 12) & 0x7;
 								const rd = (hw2 >> 8) & 0xF;
 								const imm8 = hw2 & 0xFF;
-								const imm16 = (iBit << 11) | (imm4 << 12) | (imm3 << 8) | imm8;
+								const imm16 = (imm4 << 12) | (iBit << 11) | (imm3 << 8) | imm8;
 
 								// Only collect MOVW to R0 (color register)
 								if (rd === 0) {
-									preloadColors[colorIdx] = imm16;
-									// Decode the MOVW instruction for detailed tracking
-									const instr = this.decoder.decode(addr);
-									preloadMovwRecords[colorIdx] = {
-										addr,
-										instr,
-										colorValue: imm16,
-										targetReg: rd,
-										themeCondition: null
-									};
-									colorIdx++;
+									const colorIdx = isAtBeqTarget ? 0 : lastCmpIndex;
+									if (colorIdx >= 0) {
+										preloadColors[colorIdx] = imm16;
+										// Decode the MOVW instruction for detailed tracking
+										const instr = this.decoder.decode(addr);
+										preloadMovwRecords[colorIdx] = {
+											addr,
+											instr,
+											colorValue: imm16,
+											targetReg: rd,
+											themeCondition: null
+										};
+									}
 								}
 								addr += 4;
 							} else {

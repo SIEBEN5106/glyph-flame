@@ -13,6 +13,7 @@ import { PatchDetector } from './detector.js';
 import { createPatchMetadata, writePatchMetadata } from './metadata.js';
 import { discoverFlacFunction, discoverMenuFunction, findFunctionStart, discoverPatchesBySignature } from './discovery.js';
 import { ThemeColorExtractor } from './extractor.js';
+import { patchSwitchCaseFunction } from './switch-case-patcher.js';
 import {
 	type PatchResult,
 	type PatchPoint,
@@ -271,6 +272,131 @@ export class ThemePatcher {
 		}
 
 		return { flacColors, menuColors };
+	}
+
+	/**
+	 * Extract Progress Bar and Marquee colors from firmware
+	 * Returns the current colors for these switch_case functions
+	 */
+	extractSwitchCaseColors(): {
+		progressColors: number[];
+		marqueeColors: number[];
+	} {
+		const extractor = new ThemeColorExtractor(this.data);
+		const result = extractor.extract();
+
+		// Extract Progress Bar colors (5 themes)
+		const progressFunc = result.themeFunctions.find(f => f.type === 'progress');
+		let progressColors: number[] = [0, 0, 0, 0, 0];
+		if (progressFunc) {
+			progressColors = extractor.getColorsForFunction('progress');
+		}
+
+		// Extract Marquee colors (5 themes)
+		const marqueeFunc = result.themeFunctions.find(f => f.type === 'marquee');
+		let marqueeColors: number[] = [0, 0, 0, 0, 0];
+		if (marqueeFunc) {
+			marqueeColors = extractor.getColorsForFunction('marquee');
+		}
+
+		return { progressColors, marqueeColors };
+	}
+
+	/**
+	 * Patch Progress Bar and/or Marquee switch_case functions
+	 *
+	 * Unlike FLAC/Menu which use NOP slides and BL instructions,
+	 * switch_case functions are patched by modifying MOVW instructions directly.
+	 *
+	 * @param options - Patch options with optional progressColors and/or marqueeColors
+	 * @param outputPath - Path to write patched firmware
+	 * @param writeFile - Whether to write to disk (default: true)
+	 */
+	patchSwitchCase(
+		options: {
+			progressColors?: number[];
+			marqueeColors?: number[];
+		},
+		outputPath: string,
+		writeFile = true
+	): {
+		success: boolean;
+		progressPatched: boolean;
+		marqueePatched: boolean;
+		progressResults?: { funcAddr: number; patchesApplied: number; originalColors: number[]; newColors: number[] };
+		marqueeResults?: { funcAddr: number; patchesApplied: number; originalColors: number[]; newColors: number[] };
+	} {
+		// Validate that at least one color set is provided
+		if (!options.progressColors && !options.marqueeColors) {
+			throw new ValidationError('At least one of progressColors or marqueeColors must be provided');
+		}
+
+		// Validate color counts
+		if (options.progressColors && options.progressColors.length !== 5) {
+			throw new ValidationError('Progress Bar colors must have exactly 5 values');
+		}
+		if (options.marqueeColors && options.marqueeColors.length !== 5) {
+			throw new ValidationError('Marquee colors must have exactly 5 values');
+		}
+
+		// Get the function addresses from theme extraction
+		const extractor = new ThemeColorExtractor(this.data);
+		const result = extractor.extract();
+
+		const progressFunc = result.themeFunctions.find(f => f.type === 'progress');
+		const marqueeFunc = result.themeFunctions.find(f => f.type === 'marquee');
+
+		if (options.progressColors && !progressFunc) {
+			throw new ThemeError('Progress Bar function not found in firmware');
+		}
+		if (options.marqueeColors && !marqueeFunc) {
+			throw new ThemeError('Marquee function not found in firmware');
+		}
+
+		// Clone data to avoid modifying the original
+		const patchedData = new Uint8Array(this.data);
+
+		let progressPatched = false;
+		let marqueePatched = false;
+		let progressResults;
+		let marqueeResults;
+
+		// Patch Progress Bar
+		if (options.progressColors && progressFunc) {
+			const progressResult = patchSwitchCaseFunction(patchedData, progressFunc, options.progressColors);
+			progressPatched = true;
+			progressResults = {
+				funcAddr: progressResult.funcAddr,
+				patchesApplied: progressResult.patchesApplied,
+				originalColors: progressResult.originalColors,
+				newColors: progressResult.newColors
+			};
+		}
+
+		// Patch Marquee
+		if (options.marqueeColors && marqueeFunc) {
+			const marqueeResult = patchSwitchCaseFunction(patchedData, marqueeFunc, options.marqueeColors);
+			marqueePatched = true;
+			marqueeResults = {
+				funcAddr: marqueeResult.funcAddr,
+				patchesApplied: marqueeResult.patchesApplied,
+				originalColors: marqueeResult.originalColors,
+				newColors: marqueeResult.newColors
+			};
+		}
+
+		// Write to file if requested
+		if (writeFile) {
+			fileIO.writeFileSync(outputPath, patchedData);
+		}
+
+		return {
+			success: true,
+			progressPatched,
+			marqueePatched,
+			progressResults,
+			marqueeResults
+		};
 	}
 
 	/**
