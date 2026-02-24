@@ -725,8 +725,9 @@ function isPatchCodeSignature(data: Uint8Array, addr: number): boolean {
 		}
 	}
 
-	// Our patch code has 6+ MOVW/MOVT pairs in first 64 bytes
-	return pairCount >= 6;
+	// Our patch code has 3+ MOVW/MOVT pairs in first 64 bytes
+	// FLAC handler has 5 pairs (5 colors), Menu handler has 8+ pairs (15 colors)
+	return pairCount >= 3;
 }
 
 /**
@@ -796,31 +797,41 @@ export function discoverPatchesBySignature(data: Uint8Array): {
 	let flacBl = 0;
 	let menuBl = 0;
 
-	// Determine which BL is FLAC and which is Menu
-	// FLAC handler typically starts at the beginning of the NOP slide
-	// Menu handler starts after FLAC handler (with alignment)
 	if (blInstructions.length === 1) {
-		// Partial patch: determine if it's FLAC or Menu by examining handler code
+		// Partial patch: determine if it's FLAC or Menu by BL address range
+	// FLAC functions are typically in 0x80000-0x90000 range
+		// Menu functions are typically in 0x3F000-0x40000 range
 		const blAddr = blInstructions[0].blAddr;
-		const handlerOffset = blInstructions[0].target - nopSlide;
 
-		// FLAC handler is at the start (offset 0-50 typically)
-		// Menu handler comes after (offset 200+ typically, after FLAC + alignment)
-		if (handlerOffset < 100) {
-			flacBl = blAddr;  // FLAC-only patch
+		if (blAddr >= 0x80000 && blAddr < 0x90000) {
+			flacBl = blAddr;  // FLAC function
+		} else if (blAddr >= 0x3F000 && blAddr < 0x41000) {
+			menuBl = blAddr;  // Menu function
 		} else {
-			menuBl = blAddr;  // Menu-only patch
+			// Unknown range, fall back to target offset check
+			const handlerOffset = blInstructions[0].target - nopSlide;
+			if (handlerOffset < 100) {
+				flacBl = blAddr;  // Likely FLAC handler at start
+			} else {
+				menuBl = blAddr;  // Likely Menu handler after FLAC
+			}
 		}
 	} else {
-		// Two or more BLs: assume first is FLAC, second is Menu
-		flacBl = blInstructions[0].blAddr;
-
-		// Find Menu BL (second one pointing to same NOP slide)
-		for (const { blAddr, target } of blInstructions.slice(1)) {
-			if (Math.abs(target - nopSlide) < 1024) {  // Same NOP slide
-				menuBl = blAddr;
-				break;
+		// Two or more BLs: identify by BL address range
+		for (const { blAddr, target } of blInstructions) {
+			if (blAddr >= 0x80000 && blAddr < 0x90000) {
+				flacBl = blAddr;  // FLAC function
+			} else if (blAddr >= 0x3F000 && blAddr < 0x41000) {
+				menuBl = blAddr;  // Menu function
 			}
+		}
+
+		// If not found by address range, fall back to target order
+		if (flacBl === 0 && blInstructions.length >= 1) {
+			flacBl = blInstructions[0].blAddr;
+		}
+		if (menuBl === 0 && blInstructions.length >= 2) {
+			menuBl = blInstructions[1].blAddr;
 		}
 	}
 

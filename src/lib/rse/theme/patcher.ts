@@ -535,12 +535,14 @@ export class ThemePatcher {
 				const tempMetadataBytes = writePatchMetadata(tempMetadata);
 
 				// Calculate required size:
+				// - Padding for FLAC handler alignment (up to 3 bytes)
 				// - FLAC handler: tempFlacHandler.length
 				// - Menu handler: tempMenuHandler.length (aligned after FLAC)
 				// - Metadata: tempMetadataBytes.length
-				const PROTECTION_SIZE = 0;
 				const ALIGNMENT = 4;
-				const flacEnd = PROTECTION_SIZE + tempFlacHandler.length;
+				// Maximum padding needed to align FLAC handler (we don't know the start address yet)
+				const MAX_PADDING = ALIGNMENT - 1;
+				const flacEnd = MAX_PADDING + tempFlacHandler.length;
 				const menuStart = Math.ceil(flacEnd / ALIGNMENT) * ALIGNMENT;
 				const requiredSize = menuStart + tempMenuHandler.length + tempMetadataBytes.length;
 
@@ -685,18 +687,17 @@ export class ThemePatcher {
 		const metadataBytes = writePatchMetadata(metadata);
 		const METADATA_SIZE = metadataBytes.length;
 
-		// No protection area - code starts at beginning of NOP slide
-		const PROTECTION_SIZE = 0;
-
-		// Alignment for Menu handler (4-byte alignment for ARM instructions)
+		// Alignment for handlers (4-byte alignment for ARM instructions)
+		// FLAC handler MUST be 4-byte aligned because BL targets require 4-byte alignment
 		const ALIGNMENT = 4;
 
 		// Generate handlers first so we know their sizes
 		const flacHandler = this.generateFlacHandler(flacColors);
 		const menuHandler = this.generateMenuHandler(menuColors);
 
-		// Dynamically calculate offsets
-		const flacCodeOffset = PROTECTION_SIZE;
+		// Calculate padding to ensure FLAC handler is 4-byte aligned
+		// The NOP slide start might not be aligned, so we add padding
+		const flacCodeOffset = (ALIGNMENT - (nopSlide.start % ALIGNMENT)) % ALIGNMENT;
 		const flacCodeEnd = flacCodeOffset + flacHandler.length;
 
 		// Align menu handler start
