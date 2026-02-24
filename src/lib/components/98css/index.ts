@@ -20,3 +20,4 @@ export { default as WarningWindow } from './WarningWindow.svelte';
 export { default as FontDebugWindow } from './FontDebugWindow.svelte';
 export { default as TofuDebugWindow } from './TofuDebugWindow.svelte';
 export { default as FontSizeConfirmationWindow } from './FontSizeConfirmationWindow.svelte';
+export { default as ColorPicker } from './ColorPicker.svelte';
