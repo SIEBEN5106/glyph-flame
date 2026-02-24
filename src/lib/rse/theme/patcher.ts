@@ -287,43 +287,54 @@ export class ThemePatcher {
 
 		const { nopSlideAddr } = patches;
 
-		// Find NOP slide boundaries by searching for NOP bytes (0x00)
-		// Start from the code location and search backward to find the start
-		let start = nopSlideAddr;
-		while (start > 0 && this.data[start - 1] === 0x00) {
-			start--;
-		}
-
-		// For the end, search forward for the metadata signature
+		// Find the metadata first (it's at the end of the NOP slide)
 		// Metadata is 51 bytes and starts with 'ECHO' magic
 		const METADATA_SIZE = 51;
 		const MAX_SEARCH = 1024;
 
-		let end = nopSlideAddr + 200; // Start searching from a reasonable offset
+		let end = nopSlideAddr;
 		let foundMetadata = false;
 
-		for (let searchEnd = nopSlideAddr + MAX_SEARCH; searchEnd > end && end < this.data.length - METADATA_SIZE; end++) {
-			// Check for 'ECHO' magic at position (end - METADATA_SIZE)
-			const metadataStart = end - METADATA_SIZE;
-			if (metadataStart >= nopSlideAddr &&
-				this.data[metadataStart] === 0x45 &&  // 'E'
-				this.data[metadataStart + 1] === 0x43 &&  // 'C'
-				this.data[metadataStart + 2] === 0x48 &&  // 'H'
-				this.data[metadataStart + 3] === 0x4F) {  // 'O'
+		// Search forward for 'ECHO' magic
+		for (let searchAddr = nopSlideAddr; searchAddr < nopSlideAddr + MAX_SEARCH && searchAddr < this.data.length - METADATA_SIZE; searchAddr++) {
+			if (this.data[searchAddr] === 0x45 &&  // 'E'
+				this.data[searchAddr + 1] === 0x43 &&  // 'C'
+				this.data[searchAddr + 2] === 0x48 &&  // 'H'
+				this.data[searchAddr + 3] === 0x4F) {  // 'O'
+				end = searchAddr + METADATA_SIZE;
 				foundMetadata = true;
-				end = metadataStart + METADATA_SIZE;
 				break;
 			}
 		}
 
-		// If metadata not found, fall back to searching for zeros
 		if (!foundMetadata) {
-			end = nopSlideAddr + 512;
-			while (end < this.data.length && this.data[end] === 0x00) {
-				end++;
+			return null; // Can't find metadata, can't re-patch
+		}
+
+		// Now search backward from the NOP slide area to find the start
+		// Look for the boundary between zeros and code
+		let start = nopSlideAddr;
+		const MAX_BACK = 512;
+		for (let back = 0; back < MAX_BACK; back++) {
+			const checkAddr = nopSlideAddr - back;
+			if (checkAddr < 0) break;
+
+			// Look for zero bytes before code
+			// NOP slide typically has zeros (possibly with 2-byte padding), then code
+			if (this.data[checkAddr] === 0x00 && this.data[checkAddr + 1] === 0x00) {
+				// Check if this is followed by non-zero code after potential padding
+				let afterPadding = checkAddr + 2;
+				// Skip 2-byte padding
+				if (afterPadding < this.data.length && this.data[afterPadding] !== 0x00) {
+					start = afterPadding;
+					break;
+				}
+				// Check if code starts immediately (no padding)
+				if (checkAddr + 1 < this.data.length && this.data[checkAddr + 1] !== 0x00) {
+					start = checkAddr + 1;
+					break;
+				}
 			}
-			// Cap at a reasonable size
-			end = Math.min(end, nopSlideAddr + 1024);
 		}
 
 		const nopSlideSize = end - start;

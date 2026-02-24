@@ -13,7 +13,9 @@
 		"test:unit": "vitest",
 		"test": "npm run test:unit -- --run",
 		"test:setup": "bun run src/lib/rse/__tests__/setup-fixtures.ts",
-		"test:integration": "bun test src/lib/rse/__tests__/python-extraction-integration.test.ts"
+		"test:integration": "bun test src/lib/rse/__tests__/python-extraction-integration.test.ts",
+		"test:unicorn": "bun run src/lib/rse/__tests__/run-unicorn-comprehensive.ts",
+		"test:unicorn:verbose": "bun run src/lib/rse/__tests__/run-unicorn-comprehensive.ts --verbose"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^3.0.10",

@@ -641,12 +641,12 @@ function isBlInstruction(data: Uint8Array, addr: number): boolean {
 export function discoverFlacFunction(data: Uint8Array, version?: string): [number, number] | null {
 	// Try signature-based detection first (for patched firmware)
 	const patches = discoverPatchesBySignature(data);
-	if (patches) {
-		// For patched firmware, both funcAddr and patchAddr are the BL address
+	if (patches && patches.flacBlAddr > 0) {
+		// FLAC function is patched, return the BL address
 		return [patches.flacBlAddr, patches.flacBlAddr];
 	}
 
-	// Fall back to CMP+ITE pattern search (for unpatched firmware)
+	// Fall back to CMP+ITE pattern search (for unpatched or partially patched firmware)
 	const result = ThemeDiscovery.detectFlacFunction(data);
 	if (result) {
 		return result;
@@ -664,12 +664,12 @@ export function discoverFlacFunction(data: Uint8Array, version?: string): [numbe
 export function discoverMenuFunction(data: Uint8Array, version?: string): [number, number] | null {
 	// Try signature-based detection first (for patched firmware)
 	const patches = discoverPatchesBySignature(data);
-	if (patches) {
-		// For patched firmware, both funcAddr and patchAddr are the BL address
+	if (patches && patches.menuBlAddr > 0) {
+		// Menu function is patched, return the BL address
 		return [patches.menuBlAddr, patches.menuBlAddr];
 	}
 
-	// Fall back to MOV.W pattern search (for unpatched firmware)
+	// Fall back to MOV.W pattern search (for unpatched or partially patched firmware)
 	const result = ThemeDiscovery.detectMenuFunction(data);
 	if (result) {
 		return result;
@@ -783,25 +783,46 @@ export function discoverPatchesBySignature(data: Uint8Array): {
 		}
 	}
 
-	// We should have exactly 2 BLs pointing to our patch code (FLAC and Menu)
-	if (blInstructions.length >= 2) {
-		// Sort by target address (FLAC is usually first)
-		blInstructions.sort((a, b) => a.target - b.target);
+	// Handle partial patching (FLAC-only or Menu-only) and full patching
+	if (blInstructions.length === 0) {
+		// No patches found
+		return null;
+	}
 
-		const flacBl = blInstructions[0].blAddr;
-		const nopSlide = blInstructions[0].target;
+	// Sort by target address (FLAC handler is usually first)
+	blInstructions.sort((a, b) => a.target - b.target);
 
-		// Menu BL should be the second one (higher target address within same NOP slide)
-		let menuBl = 0;
+	const nopSlide = blInstructions[0].target;
+	let flacBl = 0;
+	let menuBl = 0;
+
+	// Determine which BL is FLAC and which is Menu
+	// FLAC handler typically starts at the beginning of the NOP slide
+	// Menu handler starts after FLAC handler (with alignment)
+	if (blInstructions.length === 1) {
+		// Partial patch: determine if it's FLAC or Menu by examining handler code
+		const blAddr = blInstructions[0].blAddr;
+		const handlerOffset = blInstructions[0].target - nopSlide;
+
+		// FLAC handler is at the start (offset 0-50 typically)
+		// Menu handler comes after (offset 200+ typically, after FLAC + alignment)
+		if (handlerOffset < 100) {
+			flacBl = blAddr;  // FLAC-only patch
+		} else {
+			menuBl = blAddr;  // Menu-only patch
+		}
+	} else {
+		// Two or more BLs: assume first is FLAC, second is Menu
+		flacBl = blInstructions[0].blAddr;
+
+		// Find Menu BL (second one pointing to same NOP slide)
 		for (const { blAddr, target } of blInstructions.slice(1)) {
 			if (Math.abs(target - nopSlide) < 1024) {  // Same NOP slide
 				menuBl = blAddr;
 				break;
 			}
 		}
-
-		return { flacBlAddr: flacBl, menuBlAddr: menuBl, nopSlideAddr: nopSlide };
 	}
 
-	return null;
+	return { flacBlAddr: flacBl, menuBlAddr: menuBl, nopSlideAddr: nopSlide };
 }
