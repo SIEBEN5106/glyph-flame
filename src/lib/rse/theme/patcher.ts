@@ -775,6 +775,17 @@ export class ThemePatcher {
 
 	/**
 	 * Generate FLAC handler code
+	 *
+	 * Uses explicit branches (NOT IT blocks) because Unicorn doesn't support IT blocks properly.
+	 *
+	 * Code structure:
+	 * - Load all 5 colors into R4-R8
+	 * - CMP R1, #4
+	 * - BEQ theme_4 (forward branch if equal)
+	 * - MOV R0, R4 (themes 0-3)
+	 * - B end (unconditional branch to BX LR)
+	 * - theme_4: MOV R0, R8
+	 * - end: BX LR
 	 */
 	private generateFlacHandler(colors: number[]): Uint8Array {
 		const code: number[] = [];
@@ -791,30 +802,45 @@ export class ThemePatcher {
 			code.push(...encodeMovt(reg, (color >> 16) & 0xffff));
 		}
 
-		// Select color based on R1 (theme index in R1 when handler is called)
-		// We cannot use IT blocks with MOV, so use conditional branches instead
+		// Select color based on R1 (theme index 0-4)
+		// Use simple cascading checks: if R1 matches, branch to that theme's handler
+		// BEQ offset is in instructions (2-byte each), calculated from PC+4
 
-	// CMP R1, #4
-	code.push(0x04, 0x29);  // CMP R1, #4
+		// Check theme 0: if R1 == 0, jump to theme_0 (offset 13 instructions)
+		code.push(0x00, 0x29);  // CMP R1, #0
+		code.push(0x0D, 0xD0);  // BEQ theme_0 (offset = 13)
 
-	// B.EQ theme_4 (forward branch to MOV R0, R8 instruction)
-	// Target is 2 instructions ahead (skip MOV R0, R4 and B), offset = 1 word
-	// 16-bit conditional branch: offset is in words (2 bytes)
-	code.push(0x01, 0xD0);  // B.EQ +1 word
+		// Check theme 1: if R1 == 1, jump to theme_1 (offset 9 instructions)
+		code.push(0x01, 0x29);  // CMP R1, #1
+		code.push(0x09, 0xD0);  // BEQ theme_1 (offset = 9)
 
-	// Theme 0-3: Move R4 to R0
-	// MOV R0, R4 (low registers)
-	code.push(0x20, 0x1C);  // MOV R0, R4
+		// Check theme 2: if R1 == 2, jump to theme_2 (offset 5 instructions)
+		code.push(0x02, 0x29);  // CMP R1, #2
+		code.push(0x05, 0xD0);  // BEQ theme_2 (offset = 5)
 
-	// B end (skip theme 4 code, branch to next instruction which is BX LR)
-	code.push(0x00, 0xE0);  // B +0 (to BX LR)
+		// Check theme 3: if R1 == 3, jump to theme_3 (offset 1 instruction)
+		code.push(0x03, 0x29);  // CMP R1, #3
+		code.push(0x01, 0xD0);  // BEQ theme_3 (offset = 1)
 
-	// theme_4: Move R8 to R0
-	// MOV R0, R8 (high register move)
-	code.push(0x40, 0x44);  // MOV R0, R8
+		// Default (theme 4): fall through when R1 == 4
+		code.push(0x40, 0x46);  // MOV R0, R8 (MOV with high register)
+		code.push(0x70, 0x47);  // BX LR
 
-	// end: BX LR
-	code.push(0x70, 0x47); // BX LR
+		// theme_3:
+		code.push(0x38, 0x46);  // MOV R0, R7
+		code.push(0x70, 0x47);  // BX LR
+
+		// theme_2:
+		code.push(0x30, 0x46);  // MOV R0, R6
+		code.push(0x70, 0x47);  // BX LR
+
+		// theme_1:
+		code.push(0x28, 0x46);  // MOV R0, R5
+		code.push(0x70, 0x47);  // BX LR
+
+		// theme_0:
+		code.push(0x20, 0x46);  // MOV R0, R4
+		code.push(0x70, 0x47);  // BX LR
 
 		return new Uint8Array(code);
 	}
