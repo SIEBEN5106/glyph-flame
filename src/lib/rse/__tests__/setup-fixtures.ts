@@ -17,6 +17,7 @@ import { join } from 'node:path';
 // Configuration
 const BASE_DOWNLOAD_DIR = '/tmp/echo-mini-firmwares';
 const FIRMWARE_URLS = [
+	{ version: 'V3.2.0', url: 'https://fiio-firmware.fiio.net/ECHO%20MINI/ECHO%20MINI%20V3.2.0.zip' },
 	{ version: 'V3.1.0', url: 'https://fiio-firmware.fiio.net/ECHO%20MINI/ECHO%20MINI%20V3.1.0.zip' },
 	{ version: 'V3.0.0', url: 'https://fiio-firmware.fiio.net/ECHO%20MINI/ECHO%20MINI%20V3.0.0.zip' },
 	{ version: 'V2.8.0', url: 'https://fiio-firmware.fiio.net/ECHO%20MINI/ECHO%20MINI%20V2.8.0.zip' },

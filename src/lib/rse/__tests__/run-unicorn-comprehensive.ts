@@ -53,6 +53,7 @@ const FIRMWARE_INFO = [
 	{ version: 'V2.8.0', file: 'HIFIEC80.IMG', flacAddr: 0x8692C, subdir: 'ECHO MINI V2.8.0/ECHO MINI V2.8.0', groundTruth: null as { flacColors: number[]; menuColors: number[] } | null },
 	{ version: 'V3.0.0', file: 'HIFIEC00.IMG', flacAddr: 0x86958, subdir: 'ECHO MINI V3.0.0/ECHO MINI V3.0.0', groundTruth: null as { flacColors: number[]; menuColors: number[] } | null },
 	{ version: 'V3.1.0', file: 'HIFIEC10.IMG', flacAddr: 0x86CB0, subdir: 'ECHO MINI V3.1.0/ECHO MINI V3.1.0', groundTruth: null as { flacColors: number[]; menuColors: number[] } | null },
+	{ version: 'V3.2.0', file: 'HIFIEC20.IMG', flacAddr: 0x86CFC, subdir: 'ECHO MINI V3.2.0/ECHO MINI V3.2.0', groundTruth: null as { flacColors: number[]; menuColors: number[] } | null },
 ];
 
 // All test scenarios (templates - will be populated with actual ground truth per firmware)
