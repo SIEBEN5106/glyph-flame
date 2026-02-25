@@ -17,6 +17,10 @@ import { imageToRgb565 } from "$lib/rse/utils/bitmap";
 import { UNICODE_RANGES } from "$lib/rse/utils/unicode-ranges";
 import { debugMode, debugAnimationComplete } from "$lib/stores";
 import { extractThemeColors, type ColorWrite } from "$lib/rse/theme";
+import { PatchDetector } from "$lib/rse/theme/detector.js";
+import { ThemePatcher } from "$lib/rse/theme/patcher.js";
+import { ThemeColorExtractor } from "$lib/rse/theme/extractor.js";
+import { patchSwitchCaseFunction } from "$lib/rse/theme/switch-case-patcher.js";
 
 // Types
 export interface FontPlaneInfo {
@@ -384,21 +388,23 @@ export class FirmwareState {
       // Detect FLAC patch status
       const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
       if (flacFunc) {
-        // Import PatchDetector dynamically to avoid circular dependencies
-        import('$lib/rse/theme/detector.js').then(({ PatchDetector }) => {
-          const detector = new PatchDetector(firmwareData, 'Unknown');
-          // Find FLAC patch address by looking for the patch point
-          // The FLAC function has colorWrites that tell us where to patch
-          // For FLAC, we need to find where the CMP R1, #4 instruction is
-          // This is typically at or near the function start
-          const [isPatched] = detector.detectFlacPatch(flacFunc.addr);
-          this.flacPatched = isPatched;
-          this.flacPatchAddress = isPatched ? flacFunc.addr : null;
-        }).catch(() => {
-          // If detection fails, assume not patched
+        const detector = new PatchDetector(firmwareData, 'Unknown');
+
+        // Check if FLAC is patched
+        const [isPatched] = detector.detectFlacPatch(flacFunc.addr);
+
+        // Update FLAC patch status
+        // If we just set flacPatched=true (e.g., from unlock), keep it true
+        // Otherwise, use the detection result
+        if (isPatched) {
+          this.flacPatched = true;
+          this.flacPatchAddress = flacFunc.addr;
+        } else {
+          // Only set to false if we weren't previously marked as patched
+          // This preserves the state after unlock when async detection runs
           this.flacPatched = false;
           this.flacPatchAddress = null;
-        });
+        }
       }
 
       // Extract Menu colors (R0-R14 typically)
@@ -870,7 +876,6 @@ export class FirmwareState {
 
     try {
       // Extract current FLAC colors from firmware
-      const { extractThemeColors } = await import('$lib/rse/theme');
       const result = extractThemeColors(firmwareData);
 
       const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
@@ -924,21 +929,29 @@ export class FirmwareState {
       }
 
       // Apply the patch using ThemePatcher
-      const { ThemePatcher } = await import('$lib/rse/theme/patcher.js');
       const patcher = new ThemePatcher(firmwareData, 'Unknown');
 
       // Create a temporary file for the patched firmware
       const outputPath = '/tmp/temp_flac_unlock.bin';
 
       // Apply FLAC and Menu patch
-      patcher.patch(
-        { flacColors: currentFlacColors, menuColors: currentMenuColors },
-        outputPath,
-        true  // write to file
-      );
+      try {
+        patcher.patch(
+          { flacColors: currentFlacColors, menuColors: currentMenuColors },
+          outputPath,
+          true  // write to file
+        );
+      } catch (patchError) {
+        throw new Error(`Patcher.patch() failed: ${patchError instanceof Error ? patchError.message : String(patchError)}`);
+      }
 
       // Read back the patched firmware
-      const patchedData = await import('$lib/rse/utils/file-io.js').then(m => m.fileIO.readFileSync(outputPath));
+      let patchedData: Uint8Array;
+      try {
+        patchedData = fileIO.readFileSync(outputPath);
+      } catch (readError) {
+        throw new Error(`Failed to read patched firmware: ${readError instanceof Error ? readError.message : String(readError)}`);
+      }
 
       // Round-trip verification: extract colors from patched firmware
       const verifyResult = extractThemeColors(patchedData);
@@ -961,14 +974,20 @@ export class FirmwareState {
       }
 
       // Send patched firmware to worker (worker becomes source of truth)
-      this.worker!.postMessage({
-        type: "analyze",
-        id: "analyze",
-        firmware: patchedData,
-      });
+      try {
+        this.worker!.postMessage({
+          type: "analyze",
+          id: "analyze",
+          firmware: patchedData,
+        });
+      } catch (workerError) {
+        throw new Error(`Failed to send patched firmware to worker: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
+      }
+
+      // Set FLAC as patched immediately (don't wait for async detection)
       this.flacPatched = true;
 
-      
+
       // Update the selected color detail if it's a FLAC color
       if (this.selectedColorDetail && this.selectedColorDetail.semantic.includes('Codec Info')) {
         this.selectedColorDetail = { ...this.selectedColorDetail, isFlacPatched: true };
@@ -1745,10 +1764,6 @@ export class FirmwareState {
       const b5 = Math.round((rgb.b / 255) * 31);
       const rgb565 = (r5 << 11) | (g5 << 5) | b5;
 
-      // Import patching functions dynamically to avoid circular dependencies
-      const { ThemeColorExtractor, extractThemeColors } = await import('$lib/rse/theme');
-      const { patchSwitchCaseFunction } = await import('$lib/rse/theme/switch-case-patcher.js');
-
       // FLAC color editing (requires full patch re-application)
       if (type === 'flac') {
         if (!this.flacPatched) {
@@ -1803,7 +1818,6 @@ export class FirmwareState {
         }
 
         // Apply FLAC and Menu patch using ThemePatcher
-        const { ThemePatcher } = await import('$lib/rse/theme/patcher.js');
         const patcher = new ThemePatcher(firmwareData, 'Unknown');
 
         const outputPath = '/tmp/temp_flac_edit.bin';
@@ -1814,7 +1828,6 @@ export class FirmwareState {
         );
 
         // Read back the patched firmware
-        const { fileIO } = await import('$lib/rse/utils/file-io.js');
         const patchedData = fileIO.readFileSync(outputPath);
 
         // Round-trip verification: extract colors from patched firmware
