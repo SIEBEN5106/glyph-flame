@@ -75,7 +75,8 @@ export interface SequenceReplacement {
 }
 
 export class FirmwareState {
-  firmwareData = $state<Uint8Array | null>(null);
+  // Worker is the SINGLE SOURCE OF TRUTH for firmware data
+  // originalFirmwareData is only kept for reference/revert purposes
   originalFirmwareData = $state<Uint8Array | null>(null);
   worker = $state<Worker | null>(null);
   isProcessing = $state(false);
@@ -226,8 +227,38 @@ export class FirmwareState {
     };
   }
 
+  /**
+   * Get current firmware data from worker (single source of truth)
+   * Use this whenever you need the current firmware state
+   */
+  async getFirmwareFromWorker(): Promise<Uint8Array> {
+    if (!this.worker) {
+      throw new Error("Worker not initialized");
+    }
+
+    return new Promise((resolve, reject) => {
+      const handler = (e: MessageEvent) => {
+        const { type, id, result, error } = e.data;
+        if (id === "getFirmware") {
+          this.worker!.removeEventListener("message", handler);
+          if (type === "success") {
+            resolve(result as Uint8Array);
+          } else {
+            reject(new Error(error || "Failed to get firmware from worker"));
+          }
+        }
+      };
+      this.worker.addEventListener("message", handler);
+      this.worker.postMessage({
+        type: "getFirmware",
+        id: "getFirmware",
+        firmware: new Uint8Array(), // Empty, worker returns cached data
+      });
+    });
+  }
+
   async loadResources() {
-    if (!this.worker || !this.firmwareData) return;
+    if (!this.worker) return;
 
     this.worker.postMessage({
       type: "listPlanes",
@@ -287,7 +318,7 @@ export class FirmwareState {
     ];
   }
 
-  buildImageTree(images: BitmapFileInfo[]) {
+  async buildImageTree(images: BitmapFileInfo[]) {
     const imageNodes = images.map((img, idx) => {
       return {
         id: `image-${idx}`,
@@ -312,14 +343,15 @@ export class FirmwareState {
     }
 
     // Build color tree after images (last async operation)
-    this.buildColorTree();
+    await this.buildColorTree();
   }
 
-  buildColorTree() {
-    if (!this.firmwareData) return;
+  async buildColorTree() {
+    // Get firmware from worker (single source of truth)
+    const firmwareData = await this.getFirmwareFromWorker();
 
     try {
-      const result = extractThemeColors(this.firmwareData);
+      const result = extractThemeColors(firmwareData);
 
       if (result.themeFunctions.length === 0) {
         return;
@@ -331,10 +363,10 @@ export class FirmwareState {
 
       // Detect FLAC patch status
       const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
-      if (flacFunc && this.firmwareData) {
+      if (flacFunc) {
         // Import PatchDetector dynamically to avoid circular dependencies
         import('$lib/rse/theme/detector.js').then(({ PatchDetector }) => {
-          const detector = new PatchDetector(this.firmwareData!, 'Unknown');
+          const detector = new PatchDetector(firmwareData, 'Unknown');
           // Find FLAC patch address by looking for the patch point
           // The FLAC function has colorWrites that tell us where to patch
           // For FLAC, we need to find where the CMP R1, #4 instruction is
@@ -711,7 +743,7 @@ export class FirmwareState {
   }
 
   loadPlane(plane: FontPlaneInfo) {
-    if (!this.worker || !this.firmwareData || this.isProcessing) return;
+    if (!this.worker || this.isProcessing) return;
 
     this.isProcessing = true;
     this.statusMessage = `Extracting ${plane.name} (${plane.fontType})...`;
@@ -720,7 +752,7 @@ export class FirmwareState {
     this.worker.postMessage({
       type: "extractPlane",
       id: "extractPlane",
-      firmware: new Uint8Array(),
+      firmware: new Uint8Array(), // Worker has cached copy
       fontType: plane.fontType,
       planeName: plane.name,
       start: plane.start,
@@ -729,7 +761,7 @@ export class FirmwareState {
   }
 
   loadImage(image: BitmapFileInfo) {
-    if (!this.worker || !this.firmwareData || this.isProcessing) return;
+    if (!this.worker || this.isProcessing) return;
 
     this.isProcessing = true;
     this.statusMessage = `Extracting ${image.name}...`;
@@ -738,7 +770,7 @@ export class FirmwareState {
     this.worker.postMessage({
       type: "extractImage",
       id: "extractImage",
-      firmware: new Uint8Array(),
+      firmware: new Uint8Array(), // Worker has cached copy
       imageName: image.name,
       width: image.width,
       height: image.height,
@@ -753,7 +785,7 @@ export class FirmwareState {
 
     try {
       const arrayBuffer = await file.arrayBuffer();
-      this.firmwareData = new Uint8Array(arrayBuffer);
+      const firmwareData = new Uint8Array(arrayBuffer);
       this.originalFirmwareData = new Uint8Array(arrayBuffer);
 
       this.replacedImages = [];
@@ -763,10 +795,11 @@ export class FirmwareState {
       this.progress = 30;
       this.statusMessage = "Analyzing firmware...";
 
+      // Send firmware to worker - worker becomes the source of truth
       this.worker!.postMessage({
         type: "analyze",
         id: "analyze",
-        firmware: this.firmwareData,
+        firmware: firmwareData,
       });
 
       this.progress = 100;
@@ -801,10 +834,8 @@ export class FirmwareState {
   }
 
   async performFlacUnlock() {
-    if (!this.firmwareData) {
-      this.showWarningDialog("Error", "No firmware loaded");
-      return;
-    }
+    // Get firmware from worker (single source of truth)
+    const firmwareData = await this.getFirmwareFromWorker();
 
     this.isProcessing = true;
     this.statusMessage = "Unlocking FLAC color editing...";
@@ -812,7 +843,7 @@ export class FirmwareState {
     try {
       // Extract current FLAC colors from firmware
       const { extractThemeColors } = await import('$lib/rse/theme');
-      const result = extractThemeColors(this.firmwareData);
+      const result = extractThemeColors(firmwareData);
 
       const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
       if (!flacFunc) {
@@ -866,7 +897,7 @@ export class FirmwareState {
 
       // Apply the patch using ThemePatcher
       const { ThemePatcher } = await import('$lib/rse/theme/patcher.js');
-      const patcher = new ThemePatcher(this.firmwareData, 'Unknown');
+      const patcher = new ThemePatcher(firmwareData, 'Unknown');
 
       // Create a temporary file for the patched firmware
       const outputPath = '/tmp/temp_flac_unlock.bin';
@@ -901,12 +932,16 @@ export class FirmwareState {
         }
       }
 
-      // Update firmware data
-      this.firmwareData = patchedData;
+      // Send patched firmware to worker (worker becomes source of truth)
+      this.worker!.postMessage({
+        type: "analyze",
+        id: "analyze",
+        firmware: patchedData,
+      });
       this.flacPatched = true;
 
       // Refresh color data
-      this.buildColorTree();
+      await this.buildColorTree();
 
       // Update the selected color detail if it's a FLAC color
       if (this.selectedColorDetail && this.selectedColorDetail.semantic.includes('Codec Info')) {
@@ -942,7 +977,7 @@ export class FirmwareState {
       return;
     }
 
-    if (!this.firmwareData || this.imageList.length === 0) {
+    if (this.imageList.length === 0) {
       this.showWarningDialog("Error", "No firmware loaded or no images available.");
       return;
     }
@@ -1063,21 +1098,17 @@ export class FirmwareState {
   }
 
   async exportFirmware() {
-    if (!this.firmwareData) {
-      this.showWarningDialog("Export Error", "No firmware data to export.");
-      return;
-    }
-
     this.isProcessing = true;
     this.statusMessage = "Exporting firmware...";
 
     try {
-      // Use the current firmware data directly (it's already up-to-date)
-      // Don't ask the worker since it has a stale copy
+      // Get firmware from worker (single source of truth)
+      const firmwareData = await this.getFirmwareFromWorker();
+
       const now = new Date();
       const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, -5);
       const filename = `firmware_modified_${timestamp}.bin`;
-      await fileIO.writeFile(filename, this.firmwareData);
+      await fileIO.writeFile(filename, firmwareData);
       this.statusMessage = `Firmware exported as ${filename}`;
     } catch (err) {
       this.showWarningDialog("Export Error", `Failed to export firmware: ${err instanceof Error ? err.message : String(err)}`);
@@ -1087,8 +1118,8 @@ export class FirmwareState {
   }
 
   async bundleImagesAsZip() {
-    if (!this.firmwareData || !this.worker) {
-      this.showWarningDialog("Export Error", "No firmware data to export.");
+    if (!this.worker) {
+      this.showWarningDialog("Export Error", "No worker available.");
       return;
     }
 
@@ -1096,6 +1127,9 @@ export class FirmwareState {
     this.statusMessage = "Preparing image bundle...";
 
     try {
+      // Get firmware from worker (single source of truth)
+      const firmwareData = await this.getFirmwareFromWorker();
+
       const zipData = await new Promise<Uint8Array>((resolve, reject) => {
         const handler = (e: MessageEvent) => {
           const data = e.data;
@@ -1110,8 +1144,8 @@ export class FirmwareState {
           }
         };
         this.worker!.addEventListener("message", handler);
-        // Pass current firmware data to worker (worker's internal copy may be stale)
-        this.worker!.postMessage({ type: "bundleImagesAsZip", id: "bundleImagesAsZip", firmware: this.firmwareData });
+        // Pass current firmware data to worker
+        this.worker!.postMessage({ type: "bundleImagesAsZip", id: "bundleImagesAsZip", firmware: firmwareData });
       });
 
       const now = new Date();
@@ -1127,7 +1161,7 @@ export class FirmwareState {
   }
 
   async replaceFont(file: File): Promise<void> {
-    if (!this.worker || !this.firmwareData) {
+    if (!this.worker) {
       this.showWarningDialog("Error", "No firmware loaded or worker not available.");
       return;
     }
@@ -1244,6 +1278,16 @@ export class FirmwareState {
             const mergedChars = new Set([...targetSet, ...data.replacedCharacters]);
             if (fontType === "SMALL") this.replacedSmallFontCharacters = mergedChars;
             else this.replacedLargeFontCharacters = mergedChars;
+
+            // Worker returns modified firmware - send it back to worker as new source of truth
+            if (data.firmware) {
+              this.worker!.postMessage({
+                type: "analyze",
+                id: "analyze",
+                firmware: data.firmware,
+              });
+            }
+
             this.statusMessage = `Font replacement completed: ${data.successCount} replaced, ${data.skippedCount} skipped`;
             this.progress = 100;
             resolve();
@@ -1261,7 +1305,7 @@ export class FirmwareState {
       fontFamily,
       fontSize,
       fontType,
-      firmware: this.firmwareData ? new Uint8Array(this.firmwareData) : null,
+      firmware: new Uint8Array(), // Worker will use its cached copy
       codePoints: codePointsToProcess,
     };
     try {
@@ -1662,7 +1706,7 @@ export class FirmwareState {
   }
 
   async handleColorSelect(rgb: { r: number; g: number; b: number }) {
-    if (!this.colorPickerTarget || !this.firmwareData) return;
+    if (!this.colorPickerTarget) return;
 
     const { type, themeId } = this.colorPickerTarget;
     this.isProcessing = true;
@@ -1685,8 +1729,11 @@ export class FirmwareState {
           throw new Error("FLAC color editing is not unlocked. Please unlock first.");
         }
 
+        // Get firmware from worker (single source of truth)
+        const firmwareData = await this.getFirmwareFromWorker();
+
         // Extract current FLAC and Menu colors from firmware
-        const result = extractThemeColors(this.firmwareData);
+        const result = extractThemeColors(firmwareData);
         const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
         const menuFunc = result.themeFunctions.find(f => f.type === 'menu');
 
@@ -1731,7 +1778,7 @@ export class FirmwareState {
 
         // Apply FLAC and Menu patch using ThemePatcher
         const { ThemePatcher } = await import('$lib/rse/theme/patcher.js');
-        const patcher = new ThemePatcher(this.firmwareData, 'Unknown');
+        const patcher = new ThemePatcher(firmwareData, 'Unknown');
 
         const outputPath = '/tmp/temp_flac_edit.bin';
         patcher.patch(
@@ -1798,11 +1845,15 @@ export class FirmwareState {
           }
         }
 
-        // Update firmware data
-        this.firmwareData = patchedData;
+        // Send patched firmware to worker (worker becomes source of truth)
+        this.worker!.postMessage({
+          type: "analyze",
+          id: "analyze",
+          firmware: patchedData,
+        });
 
         // Refresh color data using the extraction logic
-        const result2 = extractThemeColors(this.firmwareData);
+        const result2 = extractThemeColors(patchedData);
 
         if (result2.themeFunctions.length === 0) {
           throw new Error("No theme functions found in patched firmware");
@@ -1828,7 +1879,10 @@ export class FirmwareState {
       }
 
       // Progress Bar and Marquee color editing (switch_case patching)
-      const extractor = new ThemeColorExtractor(this.firmwareData);
+      // Get firmware from worker (single source of truth)
+      const firmwareData = await this.getFirmwareFromWorker();
+
+      const extractor = new ThemeColorExtractor(firmwareData);
       const extractResult = extractor.extract();
 
       const targetFunc = extractResult.themeFunctions.find(f => f.type === type);
@@ -1837,7 +1891,7 @@ export class FirmwareState {
       }
 
       // Clone firmware data to avoid modifying the original
-      const patchedFirmware = new Uint8Array(this.firmwareData);
+      const patchedFirmware = new Uint8Array(firmwareData);
 
       // Get current colors - preloadColors is a Record<number, number>
       const currentColors = targetFunc.preloadColors ?? {};
@@ -1877,11 +1931,15 @@ export class FirmwareState {
         }
       }
 
-      // Update firmware data
-      this.firmwareData = patchedFirmware;
+      // Send patched firmware to worker (worker becomes source of truth)
+      this.worker!.postMessage({
+        type: "analyze",
+        id: "analyze",
+        firmware: patchedFirmware,
+      });
 
       // Refresh color data using the extraction logic
-      const result = extractThemeColors(this.firmwareData);
+      const result = extractThemeColors(patchedFirmware);
 
       if (result.themeFunctions.length === 0) {
         throw new Error("No theme functions found in patched firmware");
@@ -1910,7 +1968,6 @@ export class FirmwareState {
   }
 
   handleCloseResourceViewer() {
-    this.firmwareData = null;
     this.treeNodes = [];
     this.imageList = [];
     this.selectedNode = null;
