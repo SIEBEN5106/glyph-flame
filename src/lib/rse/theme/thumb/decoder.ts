@@ -625,7 +625,7 @@ export class ThumbDecoder {
 
 		return createInstruction(
 			addr, raw, 'MOVT', `R${rd}, #0x${imm16.toString(16).padStart(4, '0').toUpperCase()}`,
-			InstructionType.MOVW, { rd, imm: imm16 << 16, size: 4 }
+			InstructionType.MOVT, { rd, imm: imm16 << 16, size: 4 }
 		);
 	}
 
@@ -677,7 +677,7 @@ export class ThumbDecoder {
 		const i1 = ~(j1 ^ s) & 1;
 		const i2 = ~(j2 ^ s) & 1;
 
-		let imm32 = (s << 24) | (i1 << 23) | (i2 << 22) | (imm10 << 11) | imm11;
+		let imm32 = (s << 24) | (i1 << 23) | (i2 << 22) | (imm10 << 12) | (imm11 << 1);
 		if (s) {
 			imm32 = imm32 | 0xfe000000;
 		}
@@ -687,7 +687,7 @@ export class ThumbDecoder {
 			imm32 = imm32 - 0x100000000;
 		}
 
-		const target = addr + 4 + imm32;
+		const target = addr + 4 + (imm32 << 1);
 		return createInstruction(addr, raw, 'BL', `0x${target.toString(16).toUpperCase().padStart(5, '0')}`, InstructionType.BL, { branchTarget: target, size: 4 });
 	}
 
@@ -711,7 +711,7 @@ export class ThumbDecoder {
 			imm32 = imm32 - 0x100000000;
 		}
 
-		const target = addr + 4 + imm32;
+		const target = addr + 4 + (imm32 << 1);
 		return createInstruction(addr, raw, 'B.W', `0x${target.toString(16).toUpperCase().padStart(5, '0')}`, InstructionType.B, { branchTarget: target, size: 4 });
 	}
 

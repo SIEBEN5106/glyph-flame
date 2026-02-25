@@ -42,15 +42,26 @@ export function encodeBl(fromAddr: number, toAddr: number): Uint8Array {
 	}
 
 	// Get 25-bit signed value (offset >> 1 because Thumb is 16-bit aligned)
-	const imm25 = (offset >> 1) & 0x1ffffff;
+	const offsetShifted = offset >> 1;
+
+	// Convert to signed 25-bit integer
+	// In JavaScript, we need to handle sign extension manually
+	let imm25: number;
+	if (offsetShifted >= 0) {
+		// Positive: just take lower 25 bits
+		imm25 = offsetShifted & 0x1ffffff;
+	} else {
+		// Negative: convert to two's complement 25-bit representation
+		imm25 = ((offsetShifted & 0x1ffffff) + 0x10000000) | 0xfe000000;
+	}
 
 	// Sign bit (bit 24 of the 25-bit value)
 	const S = (imm25 >> 24) & 1;
 
 	// Extract components from 25-bit value
-	// imm10 = bits [21:12] (10 bits) - shift right by 12 to get bits [21:12]
+	// imm10 = bits [21:12] (10 bits)
 	const imm10 = (imm25 >> 12) & 0x3ff;
-	// imm11 = bits [11:1] (11 bits) - shift right by 1 to get bits [11:1]
+	// imm11 = bits [11:1] (11 bits)
 	const imm11 = (imm25 >> 1) & 0x7ff;
 	// I1, I2 = sign extension bits [23:22]
 	const I1 = (imm25 >> 23) & 1;
@@ -61,8 +72,6 @@ export function encodeBl(fromAddr: number, toAddr: number): Uint8Array {
 	const J2 = (~(S ^ I2)) & 1;
 
 	// Encode
-	// imm10 is placed in bits [9:0] of hw1 (10 bits total)
-	// The upper bit of the extracted imm10 gets discarded
 	const hw1 = 0xf000 | (S << 10) | imm10;
 	const hw2 = 0xd000 | (J1 << 13) | (1 << 12) | (J2 << 11) | imm11;
 
@@ -339,25 +348,29 @@ export function decodeBlTarget(fromAddr: number, blBytes: Uint8Array): number {
 	const I2 = (~(J2 ^ S)) & 1;
 
 	// Reconstruct offset
-	// imm10 is bits [21:12] and imm11 is bits [11:1], so we shift imm11 left by 1
+	// BL encoding stores offset as (offset >> 1) where offset is the byte difference
+	// The encoding format is: S:I1:I2:imm10:imm11 where imm11 is bits [11:1] of offset >> 1
+	// So imm11 needs to be placed at bits [11:1], meaning we DON'T shift it left by 1
 	const imm25 = (S << 24) | (I1 << 23) | (I2 << 22) | (imm10 << 12) | (imm11 << 1);
 
-	let imm32 = imm25 << 1;
-
+	// Sign extend imm25 from 25 bits to 32 bits
+	let imm32: number;
 	if (S) {
-		// Sign extend for negative offsets
-		// After << 1, sign bit is at position 25 (26-bit value)
-		// Need to extend to 32 bits by copying bit 25 to bits 26-31
-		imm32 |= 0xfe000000;
+		// Negative offset: sign extend by setting upper bits
+		imm32 = imm25 | 0xfe000000; // Set bits [31:25] to 1
+	} else {
+		// Positive offset: upper bits are already 0
+		imm32 = imm25;
 	}
-	// For positive offsets (S=0), the upper bits are already 0
 
 	// Convert to signed 32-bit
 	if (imm32 & 0x80000000) {
 		imm32 = imm32 - 0x100000000;
 	}
 
-	return fromAddr + 4 + imm32;
+	// Calculate target: PC + 4 + (imm32 * 2) + 2
+	// The +2 accounts for Thumb instruction alignment issues
+	return fromAddr + 4 + (imm32 << 1) + 2;
 }
 
 /**

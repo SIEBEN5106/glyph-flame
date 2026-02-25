@@ -17,10 +17,9 @@ import { imageToRgb565 } from "$lib/rse/utils/bitmap";
 import { UNICODE_RANGES } from "$lib/rse/utils/unicode-ranges";
 import { debugMode, debugAnimationComplete } from "$lib/stores";
 import { extractThemeColors, type ColorWrite } from "$lib/rse/theme";
-import { PatchDetector } from "$lib/rse/theme/detector.js";
+import { ThemePatcher } from "$lib/rse/theme/patcher.js";
 import { ThemeColorExtractor } from "$lib/rse/theme/extractor.js";
 import { patchSwitchCaseFunction } from "$lib/rse/theme/switch-case-patcher.js";
-import { discoverFlacFunction } from "$lib/rse/theme/discovery.js";
 
 // Types
 export interface FontPlaneInfo {
@@ -436,39 +435,25 @@ export class FirmwareState {
       // Get firmware from worker (single source of truth)
       const firmwareData = await this.getFirmwareFromWorker();
 
+      const patcher = new ThemePatcher(firmwareData, 'Unknown');
+      const analysis = patcher.analyze();
+
+      if (analysis.themeFunctions.length === 0) {
+        return;
+      }
+
+      if (!analysis.canPatch) {
+        return;
+      }
+
+      // Use patch detection results from analysis (no manual detection needed)
+      this.flacPatched = analysis.patchStatus.flacPatched;
+      this.flacPatchAddress = analysis.themeFunctions.find(f => f.type === 'flac')?.patchAddr ?? null;
+
+      // Get theme functions with color writes for building the color tree
+      // Note: extractThemeColors() populates colorWrites via simulation,
+      // which we need for the UI. PatchPointInfo doesn't have this.
       const result = extractThemeColors(firmwareData);
-
-      if (result.themeFunctions.length === 0) {
-        return;
-      }
-
-      if (!result.canPatch) {
-        return;
-      }
-
-      // Detect FLAC patch status
-      // NOTE: We need to use the patch address, not the function address
-      // The BL instruction is applied at patchAddr, which is different from funcAddr
-      const flacDiscovery = discoverFlacFunction(firmwareData, 'Unknown');
-      if (flacDiscovery) {
-        const [, patchAddr] = flacDiscovery;
-        const detector = new PatchDetector(firmwareData, 'Unknown');
-
-        // Check if FLAC is patched at the patch address
-        const [isPatched] = detector.detectFlacPatch(patchAddr);
-
-        // Update FLAC patch status
-        if (isPatched) {
-          this.flacPatched = true;
-          this.flacPatchAddress = patchAddr;
-        } else {
-          this.flacPatched = false;
-          this.flacPatchAddress = null;
-        }
-      } else {
-        this.flacPatched = false;
-        this.flacPatchAddress = null;
-      }
 
       // Extract Menu colors (R0-R14 typically)
       const menuColorEntries: ColorEntry[] = [];

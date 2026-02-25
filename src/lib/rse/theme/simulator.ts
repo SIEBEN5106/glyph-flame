@@ -22,7 +22,8 @@ export class ControlFlowSimulator {
 		funcAddr: number,
 		endAddr: number,
 		themeValue: number,
-		themeRegister: number = 0
+		themeRegister: number = 0,
+		debug = false
 	): [Map<number, number>, ColorWrite[], MovwRecord[]] {
 		const registers = new Map<number, number>();
 		for (let i = 0; i < 16; i++) {
@@ -41,14 +42,35 @@ export class ControlFlowSimulator {
 		let itBlockRemaining = 0;
 		const itConditions: boolean[] = [];
 		let currentThemeCondition: number | null = null;
+		let linkReg = 0; // LR (r14) for return address tracking
+		let callDepth = 0; // Track if we're in a handler
 
 		let addr = funcAddr;
 		const maxSteps = 500;
 
-		for (let step = 0; step < maxSteps && addr < endAddr;) {
+		if (debug) console.error(`[SIM] Starting simulation at 0x${funcAddr.toString(16)}, endAddr=0x${endAddr.toString(16)}, theme=${themeValue}`);
+
+		for (let step = 0; step < maxSteps;) {
+			// Stop if we've exceeded endAddr AND we're not in a handler
+			if (addr >= endAddr && callDepth === 0) {
+				if (debug) console.error(`[SIM] Reached endAddr=0x${endAddr.toString(16)} at addr=0x${addr.toString(16)}, stopping`);
+				break;
+			}
+
+			// Stop if we've gone outside valid firmware range
+			const dataLen = this.decoder['getData']().length;
+			if (addr >= dataLen || addr < 0) {
+				if (debug) console.error(`[SIM] Address 0x${addr.toString(16)} is outside firmware range, stopping`);
+				break;
+			}
+
 			const instr = this.decoder.decode(addr);
 			const instrSize = instr.size;
 
+			if (debug) {
+				const handlerInfo = callDepth > 0 ? `[HANDLER d=${callDepth}] ` : '';
+				console.error(`[SIM] ${handlerInfo}Step ${step}: addr=0x${addr.toString(16)}, instr=${instr.mnemonic} ${instr.operands}`);
+			}
 			// Handle IT block instructions
 			if (itBlockRemaining > 0) {
 				const condIdx = itConditions.length - itBlockRemaining;
@@ -83,7 +105,11 @@ export class ControlFlowSimulator {
 				movwRecords,
 				lastCmpResult,
 				itConditions,
-				endAddr
+				endAddr,
+				instrSize,
+				linkReg,
+				callDepth,
+				debug
 			);
 
 			// Update state from instruction execution
@@ -93,10 +119,16 @@ export class ControlFlowSimulator {
 			if (result.newItBlockRemaining !== null) {
 				itBlockRemaining = result.newItBlockRemaining;
 			}
+			linkReg = result.newLinkReg;
+			callDepth = result.newCallDepth;
 
 			// Handle branch target
 			if (result.branchTo !== null) {
+				const oldAddr = addr;
 				addr = result.branchTo;
+				if (debug && (addr !== oldAddr + instrSize)) {
+					console.error(`[SIM]   -> Jumping from 0x${oldAddr.toString(16)} to 0x${addr.toString(16)}`);
+				}
 			} else {
 				addr += instrSize;
 			}
@@ -120,11 +152,17 @@ export class ControlFlowSimulator {
 		movwRecords: MovwRecord[],
 		lastCmpResult: boolean,
 		itConditions: boolean[],
-		endAddr: number
-	): { newCmpResult: boolean | null; newItBlockRemaining: number | null; branchTo: number | null } {
+		endAddr: number,
+		instrSize: number,
+		linkReg: number,
+		callDepth: number,
+		debug = false
+	): { newCmpResult: boolean | null; newItBlockRemaining: number | null; branchTo: number | null; newLinkReg: number; newCallDepth: number } {
 		let newCmpResult: boolean | null = null;
 		let newItBlockRemaining: number | null = null;
 		let branchTo: number | null = null;
+		let newLinkReg = linkReg;
+		let newCallDepth = callDepth;
 
 		switch (instr.instrType) {
 			case InstructionType.PUSH:
@@ -136,12 +174,28 @@ export class ControlFlowSimulator {
 				break;
 
 			case InstructionType.BX:
-				// Would return from function - stop simulation by jumping beyond endAddr
-				branchTo = endAddr + 1;
+				// Check if we're returning from a handler (BL call) or exiting main function
+				if (callDepth > 0 && linkReg > 0) {
+					// Return from handler - jump back to caller
+					branchTo = linkReg;
+					newCallDepth = callDepth - 1;
+					newLinkReg = 0; // LR is consumed on return
+				} else {
+					// Exiting main function - stop simulation
+					branchTo = endAddr + 1;
+				}
 				break;
 
 			case InstructionType.MOVW:
 				this.handleMovw(instr, addr, registers, registerSources, movwRecords, currentThemeCondition);
+				break;
+
+			case InstructionType.MOVT:
+				// MOVT sets the upper 16 bits of the register
+				// Combine with existing lower 16 bits from MOVW
+				const currentVal = registers.get(instr.rd) ?? 0;
+				const newVal = (currentVal & 0xffff) | (instr.imm & 0xffff0000);
+				registers.set(instr.rd, newVal);
 				break;
 
 			case InstructionType.MOVS:
@@ -173,6 +227,26 @@ export class ControlFlowSimulator {
 				branchTo = this.getBranchTarget(instr);
 				break;
 
+			case InstructionType.BL:
+				// Branch with link - set LR to return address and follow the branch
+				// Only follow BL if target is within valid firmware range
+				const blTarget = this.getBranchTarget(instr);
+				const dataLen = this.decoder['getData']().length;
+				if (debug) console.error(`[SIM] BL at 0x${addr.toString(16)} -> 0x${blTarget.toString(16)}, LR=0x${(addr + instrSize).toString(16)}`);
+
+				if (blTarget >= 0 && blTarget < dataLen) {
+					// Valid target - follow the BL
+					if (debug) console.error(`[SIM]   -> Following BL to handler at 0x${blTarget.toString(16)}`);
+					newLinkReg = addr + instrSize;
+					newCallDepth = callDepth + 1;
+					branchTo = blTarget;
+				} else {
+					// Invalid target (library call) - skip BL and continue
+					if (debug) console.error(`[SIM]   -> Skipping BL with invalid target, continuing`);
+					branchTo = null; // Don't branch, just continue
+				}
+				break;
+
 			case InstructionType.CBZ:
 				// Compare and branch on zero
 				if (instr.rn >= 0 && instr.rn < 16) {
@@ -201,7 +275,7 @@ export class ControlFlowSimulator {
 				break;
 		}
 
-		return { newCmpResult, newItBlockRemaining, branchTo };
+		return { newCmpResult, newItBlockRemaining, branchTo, newLinkReg, newCallDepth };
 	}
 
 	/**
@@ -225,6 +299,13 @@ export class ControlFlowSimulator {
 
 			case InstructionType.MOVW:
 				this.handleMovw(instr, addr, registers, registerSources, movwRecords, currentThemeCondition);
+				break;
+
+			case InstructionType.MOVT:
+				// MOVT sets the upper 16 bits of the register
+				const currentVal = registers.get(instr.rd) ?? 0;
+				const newVal = (currentVal & 0xffff) | (instr.imm & 0xffff0000);
+				registers.set(instr.rd, newVal);
 				break;
 
 			case InstructionType.POP:

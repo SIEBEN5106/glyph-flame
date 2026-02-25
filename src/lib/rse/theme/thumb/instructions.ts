@@ -8,6 +8,7 @@
 export enum InstructionType {
 	// Data processing
 	MOVW = 'MOVW',
+	MOVT = 'MOVT',
 	MOVS = 'MOVS',
 	MVN = 'MVN',
 	ADD = 'ADD',

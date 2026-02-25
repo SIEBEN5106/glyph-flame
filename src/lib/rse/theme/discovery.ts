@@ -231,10 +231,76 @@ export class ThemeDiscovery {
 	}
 
 	/**
+	 * Find the first BL instruction in a function
+	 * Searches forward from function start to find the first BL instruction
+	 */
+	static findFirstBlInFunction(data: Uint8Array, funcAddr: number, maxSearch = 2000): number | null {
+		for (let offset = 0; offset < maxSearch; offset += 2) {
+			const addr = funcAddr + offset;
+			if (addr + 4 > data.length) break;
+
+			if (isBlInstruction(data, addr)) {
+				return addr;
+			}
+
+			// Check if instruction is 32-bit to skip correctly
+			const hw = data[addr] | (data[addr + 1] << 8);
+			const is32bit = hw >= 0xe800;
+			if (is32bit) {
+				offset += 2; // Skip extra 2 bytes for 32-bit instruction
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Detect FLAC function by analyzing behavior
 	 */
 	static detectFlacByContext(decoder: ThumbDecoder, funcAddr: number): FlacBehavior {
 		const data = decoder.getData();
+
+		// First check: Is this firmware patched with FLAC colors?
+		// If there's a patch metadata in the NOP slide, use that instead of scanning
+		const patches = discoverPatchesBySignature(data);
+		if (patches && patches.flacBlAddr > 0) {
+			// Firmware is patched - read colors from metadata
+			// Find the metadata (it's at the end of the NOP slide, 51 bytes, starts with 'ECHO')
+			const nopSlideAddr = patches.nopSlideAddr;
+			const MAX_SEARCH = 1024;
+			let metadataAddr = null;
+
+			for (let searchAddr = nopSlideAddr; searchAddr < nopSlideAddr + MAX_SEARCH && searchAddr < data.length - 51; searchAddr++) {
+				if (data[searchAddr] === 0x45 &&  // 'E'
+					data[searchAddr + 1] === 0x43 &&  // 'C'
+					data[searchAddr + 2] === 0x48 &&  // 'H'
+					data[searchAddr + 3] === 0x4F) {  // 'O'
+					metadataAddr = searchAddr;
+					break;
+				}
+			}
+
+			if (metadataAddr !== null) {
+				// Found metadata - read FLAC colors
+				// Metadata structure: magic(4) + version(4) + timestamp(4) + flacColors(5*4) + menuColors(15*4) + checksum(2)
+				const flacColorsOffset = 12; // After magic + version + timestamp
+				const colorFor4 = data[metadataAddr + flacColorsOffset + 3] | (data[metadataAddr + flacColorsOffset + 4] << 8);
+				const colorForOther = data[metadataAddr + flacColorsOffset] | (data[metadataAddr + flacColorsOffset + 1] << 8);
+
+				return {
+					type: 'standard',
+					isFlac: true,
+					colorFor4: colorFor4,
+					colorForOther: colorForOther,
+					movwAddr4: '',
+					movwInstr4: '',
+					movwAddrOther: '',
+					movwInstrOther: ''
+				};
+			}
+		}
+
+		// Not patched or metadata not found - fall back to scanning
 		let foundSeparator = false;
 		const scanRange = 1200;
 
@@ -546,7 +612,7 @@ export class ThemeDiscovery {
 			const funcStart = ThemeDiscovery.findFunctionStart(data, funcAddr);
 			if (!seenAddrs.has(funcStart)) {
 				seenAddrs.add(funcStart);
-				const funcEnd = this.findFunctionEnd(funcStart, 500);
+				const funcEnd = this.findFunctionEnd(funcStart, 2000);
 				const flacBehavior = ThemeDiscovery.detectFlacByContext(this.decoder, funcStart);
 
 				functions.push({
@@ -570,7 +636,7 @@ export class ThemeDiscovery {
 			const funcStart = ThemeDiscovery.findFunctionStart(data, funcAddr);
 			if (!seenAddrs.has(funcStart)) {
 				seenAddrs.add(funcStart);
-				const funcEnd = this.findFunctionEnd(funcStart, 500);
+				const funcEnd = this.findFunctionEnd(funcStart, 2000);
 
 				functions.push({
 					addr: funcStart,
@@ -596,8 +662,11 @@ export class ThemeDiscovery {
 
 	/**
 	 * Find function end by searching for POP + BX LR sequence
+	 *
+	 * For patched functions, BL instructions can be far from function start,
+	 * so we need to search a larger range.
 	 */
-	private findFunctionEnd(addr: number, maxSearch = 400): number {
+	private findFunctionEnd(addr: number, maxSearch = 2000): number {
 		const data = this.decoder.getData();
 		const searchEnd = Math.min(addr + maxSearch, data.length);
 		let itBlockRemaining = 0;
@@ -676,14 +745,24 @@ export function discoverFlacFunction(data: Uint8Array, version?: string): [numbe
 	// Try signature-based detection first (for patched firmware)
 	const patches = discoverPatchesBySignature(data);
 	if (patches && patches.flacBlAddr > 0) {
-		// FLAC function is patched, return the BL address
-		return [patches.flacBlAddr, patches.flacBlAddr];
+		// FLAC function is patched
+		// Find the ORIGINAL function start by tracing back from the BL instruction
+		// Search up to 2000 bytes back to find the PUSH instruction
+		const funcAddr = ThemeDiscovery.findFunctionStart(data, patches.flacBlAddr, 2000);
+		return [funcAddr, patches.flacBlAddr];
 	}
 
 	// Fall back to CMP+ITE pattern search (for unpatched or partially patched firmware)
-	const result = ThemeDiscovery.detectFlacFunction(data);
-	if (result) {
-		return result;
+	const cmpAddrResult = ThemeDiscovery.detectFlacFunction(data);
+	if (cmpAddrResult) {
+		const [funcAddr] = cmpAddrResult;
+		// Find the FIRST BL instruction in the function to use as patch address
+		const firstBlAddr = ThemeDiscovery.findFirstBlInFunction(data, funcAddr, 2000);
+		if (firstBlAddr) {
+			return [funcAddr, firstBlAddr];
+		}
+		// If no BL found, fall back to using the CMP address
+		return [funcAddr, funcAddr];
 	}
 
 	return null;
@@ -699,14 +778,24 @@ export function discoverMenuFunction(data: Uint8Array, version?: string): [numbe
 	// Try signature-based detection first (for patched firmware)
 	const patches = discoverPatchesBySignature(data);
 	if (patches && patches.menuBlAddr > 0) {
-		// Menu function is patched, return the BL address
-		return [patches.menuBlAddr, patches.menuBlAddr];
+		// Menu function is patched
+		// Find the ORIGINAL function start by tracing back from the BL instruction
+		// Search up to 2000 bytes back to find the PUSH instruction
+		const funcAddr = ThemeDiscovery.findFunctionStart(data, patches.menuBlAddr, 2000);
+		return [funcAddr, patches.menuBlAddr];
 	}
 
 	// Fall back to MOV.W pattern search (for unpatched or partially patched firmware)
-	const result = ThemeDiscovery.detectMenuFunction(data);
-	if (result) {
-		return result;
+	const movAddrResult = ThemeDiscovery.detectMenuFunction(data);
+	if (movAddrResult) {
+		const [funcAddr] = movAddrResult;
+		// Find the FIRST BL instruction in the function to use as patch address
+		const firstBlAddr = ThemeDiscovery.findFirstBlInFunction(data, funcAddr, 2000);
+		if (firstBlAddr) {
+			return [funcAddr, firstBlAddr];
+		}
+		// If no BL found, fall back to using the MOV.W address
+		return [funcAddr, funcAddr];
 	}
 
 	return null;
@@ -786,8 +875,14 @@ export function discoverPatchesBySignature(data: Uint8Array): {
 			const target = decodeBlTarget(i, blBytes);
 			if (target >= 0 && target < data.length) {
 				// Check if target has our patch code signature
-				if (isPatchCodeSignature(data, target)) {
-					blInstructions.push({ blAddr: i, target });
+				// Try a few offsets in case there's padding before the MOVW instructions
+				let found = false;
+				for (const offset of [0, 2, 4, 6, 8]) {
+					if (isPatchCodeSignature(data, target + offset)) {
+						blInstructions.push({ blAddr: i, target: target + offset });
+						found = true;
+						break;
+					}
 				}
 			}
 		}
