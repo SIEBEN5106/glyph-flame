@@ -189,7 +189,6 @@ export class FirmwareState {
       if (type === "success") {
         if (id === "analyze") {
           this.statusMessage = "Firmware analyzed. Loading resources...";
-          this.isProcessing = false;
           this.loadResources();
         } else if (id === "listPlanes") {
           const planes = result as FontPlaneInfo[];
@@ -197,7 +196,18 @@ export class FirmwareState {
         } else if (id === "listImages") {
           const images = result as BitmapFileInfo[];
           this.imageList = images;
-          this.buildImageTree(images);
+          // buildImageTree is now async, need to handle it properly
+          this.buildImageTree(images)
+            .then(() => {
+              // Successfully completed
+              this.isProcessing = false;
+              this.statusMessage = "Firmware loaded successfully";
+            })
+            .catch(err => {
+              console.error('Error building image tree:', err);
+              this.statusMessage = `Error loading resources: ${err instanceof Error ? err.message : String(err)}`;
+              this.isProcessing = false;
+            });
         } else if (id === "extractPlane") {
           const data = result as any;
           this.planeData = data;
@@ -348,10 +358,10 @@ export class FirmwareState {
   }
 
   async buildColorTree() {
-    // Get firmware from worker (single source of truth)
-    const firmwareData = await this.getFirmwareFromWorker();
-
     try {
+      // Get firmware from worker (single source of truth)
+      const firmwareData = await this.getFirmwareFromWorker();
+
       const result = extractThemeColors(firmwareData);
 
       if (result.themeFunctions.length === 0) {
@@ -661,6 +671,8 @@ export class FirmwareState {
       // Add to tree nodes
       this.treeNodes = [...this.treeNodes, colorsNode];
     } catch (error) {
+      // Log error for debugging
+      console.error('Error building color tree:', error);
       // Don't add Colors node if extraction fails
     }
   }
@@ -1494,7 +1506,7 @@ export class FirmwareState {
     }
   }
 
-  openColorPicker(type: 'progress' | 'marquee', themeId: number) {
+  openColorPicker(type: 'progress' | 'marquee' | 'flac', themeId: number) {
     this.colorPickerTarget = { type, themeId };
     this.showColorPicker = true;
   }

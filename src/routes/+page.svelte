@@ -50,7 +50,7 @@
 
   // Update document title dynamically
   $effect(() => {
-    if (!fwState.firmwareData && !fwState.isProcessing) {
+    if (!fwState.originalFirmwareData && !fwState.isProcessing) {
       document.title = "FlameOcean";
     } else if (fwState.showLoadingWindow) {
       document.title = "Loading - FlameOcean";
@@ -166,7 +166,7 @@
   async function handleImageDrop(e: DragEvent) {
     e.preventDefault();
     isImageDragOver = false;
-    if (!fwState.firmwareData || fwState.imageList.length === 0) return;
+    if (!fwState.originalFirmwareData || fwState.imageList.length === 0) return;
 
     const files = Array.from(e.dataTransfer?.files ?? []);
     if (files.length === 0) return;
@@ -192,7 +192,7 @@
   <input type="file" bind:this={fileInput} hidden onchange={handleFileSelect} />
 
   <div class="page-container">
-    {#if !fwState.firmwareData && !fwState.isProcessing}
+    {#if !fwState.originalFirmwareData && !fwState.isProcessing}
       <Window title="FlameOcean" width="500px" showClose={false}>
         <WindowBody>
           <div
@@ -223,7 +223,7 @@
       <LoadingWindow title={fwState.loadingTitle} message={fwState.statusMessage} progress={fwState.progress} />
     {/if}
 
-    {#if fwState.firmwareData && fwState.treeNodes.length > 0 && !showSequenceReplacer}
+    {#if fwState.originalFirmwareData && fwState.treeNodes.length > 0 && !showSequenceReplacer}
       <Window
         title="Resource Browser"
         class="browser-window"
@@ -366,7 +366,7 @@
       </Window>
     {/if}
 
-    {#if fwState.firmwareData && fwState.treeNodes.length > 0 && showSequenceReplacer}
+    {#if fwState.originalFirmwareData && fwState.treeNodes.length > 0 && showSequenceReplacer}
       <SequenceReplacerWindow
         targetImages={fwState.imageList}
         worker={fwState.worker!}
