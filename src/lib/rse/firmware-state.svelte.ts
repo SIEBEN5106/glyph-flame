@@ -232,7 +232,8 @@ export class FirmwareState {
    * Use this whenever you need the current firmware state
    */
   async getFirmwareFromWorker(): Promise<Uint8Array> {
-    if (!this.worker) {
+    const worker = this.worker;
+    if (!worker) {
       throw new Error("Worker not initialized");
     }
 
@@ -240,7 +241,7 @@ export class FirmwareState {
       const handler = (e: MessageEvent) => {
         const { type, id, result, error } = e.data;
         if (id === "getFirmware") {
-          this.worker!.removeEventListener("message", handler);
+          worker.removeEventListener("message", handler);
           if (type === "success") {
             resolve(result as Uint8Array);
           } else {
@@ -248,8 +249,8 @@ export class FirmwareState {
           }
         }
       };
-      this.worker.addEventListener("message", handler);
-      this.worker.postMessage({
+      worker.addEventListener("message", handler);
+      worker.postMessage({
         type: "getFirmware",
         id: "getFirmware",
         firmware: new Uint8Array(), // Empty, worker returns cached data
