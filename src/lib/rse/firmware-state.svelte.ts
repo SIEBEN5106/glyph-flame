@@ -21,6 +21,7 @@ import { PatchDetector } from "$lib/rse/theme/detector.js";
 import { ThemePatcher } from "$lib/rse/theme/patcher.js";
 import { ThemeColorExtractor } from "$lib/rse/theme/extractor.js";
 import { patchSwitchCaseFunction } from "$lib/rse/theme/switch-case-patcher.js";
+import { discoverFlacFunction } from "$lib/rse/theme/discovery.js";
 
 // Types
 export interface FontPlaneInfo {
@@ -447,25 +448,27 @@ export class FirmwareState {
       }
 
       // Detect FLAC patch status
-      const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
-      if (flacFunc) {
+      // NOTE: We need to use the patch address, not the function address
+      // The BL instruction is applied at patchAddr, which is different from funcAddr
+      const flacDiscovery = discoverFlacFunction(firmwareData, 'Unknown');
+      if (flacDiscovery) {
+        const [, patchAddr] = flacDiscovery;
         const detector = new PatchDetector(firmwareData, 'Unknown');
 
-        // Check if FLAC is patched
-        const [isPatched] = detector.detectFlacPatch(flacFunc.addr);
+        // Check if FLAC is patched at the patch address
+        const [isPatched] = detector.detectFlacPatch(patchAddr);
 
         // Update FLAC patch status
-        // If we just set flacPatched=true (e.g., from unlock), keep it true
-        // Otherwise, use the detection result
         if (isPatched) {
           this.flacPatched = true;
-          this.flacPatchAddress = flacFunc.addr;
+          this.flacPatchAddress = patchAddr;
         } else {
-          // Only set to false if we weren't previously marked as patched
-          // This preserves the state after unlock when async detection runs
           this.flacPatched = false;
           this.flacPatchAddress = null;
         }
+      } else {
+        this.flacPatched = false;
+        this.flacPatchAddress = null;
       }
 
       // Extract Menu colors (R0-R14 typically)
