@@ -269,9 +269,7 @@
               role="region"
             >
               {#if fwState.selectedNode}
-                {#if fwState.isProcessing}
-                  <div class="empty-state"><p>Loading {fwState.selectedNode.type}...</p></div>
-                {:else if fwState.selectedNode.type === "plane" && fwState.planeData}
+                {#if fwState.selectedNode.type === "plane" && fwState.planeData}
                   <div class="plane-header">
                     <h2>{fwState.planeData.name}</h2>
                     <p>U+{fwState.planeData.start.toString(16).toUpperCase()} - U+{fwState.planeData.end.toString(16).toUpperCase()}</p>
