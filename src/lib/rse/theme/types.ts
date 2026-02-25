@@ -133,6 +133,8 @@ export interface FlacBehavior {
 	colorFor4: number;
 	/** Color value for other themes (non-4) */
 	colorForOther: number;
+	/** All 5 FLAC colors (one per theme), only available when reading from metadata */
+	flacColors?: number[];
 	/** Address of MOVW instruction for theme 4 */
 	movwAddr4: string;
 	/** MOVW instruction for theme 4 */

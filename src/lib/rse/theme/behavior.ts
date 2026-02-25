@@ -6,7 +6,6 @@
  */
 
 import { ThumbDecoder } from './thumb/index.js';
-import type { Instruction } from './thumb/instructions.js';
 import type { FlacBehavior, MenuBehavior } from './types.js';
 
 /**
@@ -19,6 +18,50 @@ export class BehaviorAnalyzer {
 
 	constructor(decoder: ThumbDecoder) {
 		this.decoder = decoder;
+	}
+
+	/**
+	 * Read FLAC patch metadata from NOP slide
+	 * Returns colors if valid metadata found, null otherwise
+	 */
+	private readFlacPatchMetadata(data: Uint8Array): { flacColors: number[] } | null {
+		// Find the LAST occurrence of metadata magic string 'ECHO' in the firmware
+		// There may be multiple ECHO strings in the firmware, but our patch metadata is the last one written
+		let metadataAddr = -1;
+
+		// Search from the end backwards for 'ECHO' followed by valid version byte
+		for (let offset = data.length - 51; offset >= 0; offset--) {
+			// Check for magic string 'ECHO'
+			if (data[offset] === 0x45 && // E
+			    data[offset + 1] === 0x43 && // C
+			    data[offset + 2] === 0x48 && // H
+			    data[offset + 3] === 0x4f) { // O
+
+				// Found the last ECHO
+				metadataAddr = offset;
+				break;
+			}
+		}
+
+		if (metadataAddr < 0) {
+			return null;
+		}
+
+		// Read FLAC colors (5 * uint16 = 10 bytes, starting at offset 9)
+		// Offset breakdown: magic(4) + version(1) + timestamp(4) = 9
+		const flacColors: number[] = [];
+		for (let i = 0; i < 5; i++) {
+			const offset = metadataAddr + 9 + i * 2;
+			if (offset + 2 > data.length) break;
+			const color = data[offset] | (data[offset + 1] << 8);
+			flacColors.push(color);
+		}
+
+		if (flacColors.length !== 5) {
+			return null;
+		}
+
+		return { flacColors };
 	}
 
 	/**
@@ -35,6 +78,25 @@ export class BehaviorAnalyzer {
 	 * @returns FLAC behavior analysis result
 	 */
 	analyzeFlacFunction(addr: number, scanRange = 100): FlacBehavior {
+		// Check for patch metadata first (for patched firmware)
+		const data = this.decoder.getData();
+		const metadata = this.readFlacPatchMetadata(data);
+		if (metadata && metadata.flacColors.length === 5) {
+			// Firmware is patched - use metadata colors
+			return {
+				type: 'standard',
+				isFlac: true,
+				colorFor4: metadata.flacColors[4],
+				colorForOther: metadata.flacColors[0],
+				flacColors: metadata.flacColors,
+				movwAddr4: '(patch)',
+				movwInstr4: '(patched)',
+				movwAddrOther: '(patch)',
+				movwInstrOther: '(patched)'
+			};
+		}
+
+		// No patch metadata - scan for MOVW instructions (unpatched firmware)
 		const result: FlacBehavior = {
 			type: 'unknown',
 			isFlac: false,

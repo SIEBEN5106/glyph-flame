@@ -746,8 +746,17 @@ export function discoverFlacFunction(data: Uint8Array, version?: string): [numbe
 	const patches = discoverPatchesBySignature(data);
 	if (patches && patches.flacBlAddr > 0) {
 		// FLAC function is patched
-		// Find the ORIGINAL function start by tracing back from the BL instruction
-		// Search up to 2000 bytes back to find the PUSH instruction
+		// Find the CMP+ITE pattern by searching backwards from the BL instruction
+		// The FLAC function doesn't necessarily start with PUSH, so we look for the CMP pattern
+		const cmpAddrResult = ThemeDiscovery.detectFlacFunction(data);
+		if (cmpAddrResult) {
+			const [cmpAddr] = cmpAddrResult;
+			// Verify the CMP is before the BL and within reasonable distance
+			if (cmpAddr < patches.flacBlAddr && (patches.flacBlAddr - cmpAddr) < 500) {
+				return [cmpAddr, patches.flacBlAddr];
+			}
+		}
+		// Fallback: use findFunctionStart to find PUSH instruction
 		const funcAddr = ThemeDiscovery.findFunctionStart(data, patches.flacBlAddr, 2000);
 		return [funcAddr, patches.flacBlAddr];
 	}
@@ -779,8 +788,17 @@ export function discoverMenuFunction(data: Uint8Array, version?: string): [numbe
 	const patches = discoverPatchesBySignature(data);
 	if (patches && patches.menuBlAddr > 0) {
 		// Menu function is patched
-		// Find the ORIGINAL function start by tracing back from the BL instruction
-		// Search up to 2000 bytes back to find the PUSH instruction
+		// Find the MOV.W pattern by searching backwards from the BL instruction
+		// The Menu function doesn't necessarily start with PUSH, so we look for the MOV.W pattern
+		const movAddrResult = ThemeDiscovery.detectMenuFunction(data);
+		if (movAddrResult) {
+			const [movAddr] = movAddrResult;
+			// Verify the MOV.W is before the BL and within reasonable distance
+			if (movAddr < patches.menuBlAddr && (patches.menuBlAddr - movAddr) < 500) {
+				return [movAddr, patches.menuBlAddr];
+			}
+		}
+		// Fallback: use findFunctionStart to find PUSH instruction
 		const funcAddr = ThemeDiscovery.findFunctionStart(data, patches.menuBlAddr, 2000);
 		return [funcAddr, patches.menuBlAddr];
 	}

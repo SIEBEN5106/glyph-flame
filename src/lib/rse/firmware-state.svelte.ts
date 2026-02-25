@@ -565,7 +565,10 @@ export class FirmwareState {
 
             // Generate all 5 FLAC colors using flacBehavior
             for (let themeId = 0; themeId < 5; themeId++) {
-              const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+              // Use flacColors array if available (from metadata), otherwise fall back to colorFor4/colorForOther
+              const color = result.flacBehavior.flacColors && result.flacBehavior.flacColors.length === 5
+                ? result.flacBehavior.flacColors[themeId]
+                : (themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther);
               const movwAddr = themeId === 4 ? movwAddr4 : movwAddrOther;
               const movwInstr = themeId === 4 ? movwInstr4 : movwInstrOther;
 
@@ -1706,7 +1709,10 @@ export class FirmwareState {
           }
 
           for (let themeId = 0; themeId < 5; themeId++) {
-            const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+            // Use flacColors array if available (from metadata), otherwise fall back to colorFor4/colorForOther
+            const color = result.flacBehavior.flacColors && result.flacBehavior.flacColors.length === 5
+              ? result.flacBehavior.flacColors[themeId]
+              : (themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther);
             const movwAddr = themeId === 4 ? movwAddr4 : movwAddrOther;
             const movwInstr = themeId === 4 ? movwInstr4 : movwInstrOther;
 
