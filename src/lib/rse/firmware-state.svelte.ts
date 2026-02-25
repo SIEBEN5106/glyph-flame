@@ -875,29 +875,17 @@ export class FirmwareState {
   }
 
   async exportFirmware() {
-    if (!this.firmwareData || !this.worker) {
+    if (!this.firmwareData) {
       this.showWarningDialog("Export Error", "No firmware data to export.");
       return;
     }
 
     this.isProcessing = true;
-    this.statusMessage = "Retrieving modified firmware...";
+    this.statusMessage = "Exporting firmware...";
 
     try {
-      const modifiedFirmware = await new Promise<Uint8Array>((resolve, reject) => {
-        const handler = (e: MessageEvent) => {
-          const data = e.data;
-          if (data.id === "exportFirmware") {
-            this.worker!.removeEventListener("message", handler);
-            if (data.type === "success") resolve(data.result as Uint8Array);
-            else reject(new Error(data.error || "Failed to retrieve modified firmware"));
-          }
-        };
-        this.worker!.addEventListener("message", handler);
-        this.worker!.postMessage({ type: "getFirmware", id: "exportFirmware", firmware: new Uint8Array() });
-      });
-
-      this.firmwareData = modifiedFirmware;
+      // Use the current firmware data directly (it's already up-to-date)
+      // Don't ask the worker since it has a stale copy
       const now = new Date();
       const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, -5);
       const filename = `firmware_modified_${timestamp}.bin`;
@@ -934,7 +922,8 @@ export class FirmwareState {
           }
         };
         this.worker!.addEventListener("message", handler);
-        this.worker!.postMessage({ type: "bundleImagesAsZip", id: "bundleImagesAsZip", firmware: new Uint8Array() });
+        // Pass current firmware data to worker (worker's internal copy may be stale)
+        this.worker!.postMessage({ type: "bundleImagesAsZip", id: "bundleImagesAsZip", firmware: this.firmwareData });
       });
 
       const now = new Date();

@@ -1143,11 +1143,11 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
       }
 
       case "bundleImagesAsZip": {
-        if (!firmwareData) {
+        if (!firmware) {
           self.postMessage({
             type: "error",
             id,
-            error: "Firmware not analyzed. Call analyze first.",
+            error: "Firmware data not provided.",
           });
           return;
         }
@@ -1159,15 +1159,15 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
         });
 
         // Extract Part 5 data for later use in ZIP processing
-        const part5Offset = readU32LE(firmwareData, 0x14c);
-        const part5Size = readU32LE(firmwareData, 0x150);
-        const part5Data = firmwareData.slice(
+        const part5Offset = readU32LE(firmware, 0x14c);
+        const part5Size = readU32LE(firmware, 0x150);
+        const part5Data = firmware.slice(
           part5Offset,
           part5Offset + part5Size,
         );
 
         // Build image list using shared function
-        const images = buildBitmapListFromMetadata(firmwareData, true);
+        const images = buildBitmapListFromMetadata(firmware, true);
 
         if (images.length === 0) {
           self.postMessage({
