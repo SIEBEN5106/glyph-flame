@@ -976,8 +976,8 @@ export class FirmwareState {
 
       this.statusMessage = "FLAC color editing unlocked successfully! You can now edit FLAC colors.";
     } catch (err) {
-      this.showWarningDialog("FLAC Unlock Failed", `Failed to unlock FLAC color editing:\n${err instanceof Error ? err.message : String(err)}`);
-      this.statusMessage = "FLAC unlock failed";
+      this.showWarningDialog("FLAC Unlock Failed", `Failed to unlock codec information color editing:\n${err instanceof Error ? err.message : String(err)}`);
+      this.statusMessage = "Unknown error";
     } finally {
       this.isProcessing = false;
     }
