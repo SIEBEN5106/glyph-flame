@@ -389,7 +389,16 @@ describe('Theme Extraction Integration Tests', () => {
 		}
 	});
 
-	describe('FLAC Colors', () => {
+	describe('FLAC Colors (Original/Unpatched Firmware)', () => {
+		/**
+		 * IMPORTANT: These tests ONLY verify extraction from ORIGINAL (unpatched) firmware.
+		 *
+		 * In original firmware, themes 0-3 share one color (themes0to3) and theme 4 has a different color.
+		 * This is because the original firmware uses a CMP #4 + ITE conditional to select between 2 colors.
+		 *
+		 * For PATCHED firmware, each theme can have a completely different color.
+		 * See theme-patching-roundtrip.test.ts for tests that verify patching preserves all 5 colors.
+		 */
 		for (const truth of GROUND_TRUTH) {
 			describe(`${truth.version} (${truth.filename})`, () => {
 				let firmwareData: Uint8Array;
@@ -398,11 +407,16 @@ describe('Theme Extraction Integration Tests', () => {
 					firmwareData = loadFirmware(truth.version, truth.filename);
 				});
 
-				it(`should extract correct FLAC colors for all themes`, () => {
+				it(`should extract correct FLAC colors for all themes (original firmware behavior)`, () => {
 					const result = extractThemeColors(firmwareData);
 					const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
 
 					expect(flacFunc).toBeDefined();
+
+					// Original firmware should NOT have flacColors array (only colorFor4 and colorForOther)
+					expect(result.flacBehavior.flacColors).toBeUndefined();
+					expect(result.flacBehavior.colorFor4).toBe(truth.flacColors.theme4);
+					expect(result.flacBehavior.colorForOther).toBe(truth.flacColors.themes0to3);
 
 					// Group writes by themeCondition
 					const writesByTheme = new Map<number, ColorWrite[]>();
@@ -414,7 +428,7 @@ describe('Theme Extraction Integration Tests', () => {
 						writesByTheme.get(themeId)!.push(write);
 					}
 
-					// Themes 0-3 should have the same color
+					// Themes 0-3 should have the same color (original firmware behavior)
 					for (let themeId = 0; themeId <= 3; themeId++) {
 						const themeWrites = writesByTheme.get(themeId) ?? [];
 						expect(themeWrites.length, `FLAC Theme ${themeId} should have writes`).toBeGreaterThan(0);

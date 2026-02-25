@@ -27,6 +27,7 @@ export class BehaviorAnalyzer {
 	private readFlacPatchMetadata(data: Uint8Array): { flacColors: number[] } | null {
 		// Find the LAST occurrence of metadata magic string 'ECHO' in the firmware
 		// There may be multiple ECHO strings in the firmware, but our patch metadata is the last one written
+		// Version must be 1 (our metadata version)
 		let metadataAddr = -1;
 
 		// Search from the end backwards for 'ECHO' followed by valid version byte
@@ -37,9 +38,13 @@ export class BehaviorAnalyzer {
 			    data[offset + 2] === 0x48 && // H
 			    data[offset + 3] === 0x4f) { // O
 
-				// Found the last ECHO
-				metadataAddr = offset;
-				break;
+				// Check for valid version (must be 1 for our patch metadata)
+				const version = data[offset + 4];
+				if (version === 1) {
+					// Found valid patch metadata
+					metadataAddr = offset;
+					break;
+				}
 			}
 		}
 
