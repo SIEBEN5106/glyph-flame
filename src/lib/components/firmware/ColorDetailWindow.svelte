@@ -14,15 +14,17 @@
 		strhInstruction?: string;
 		strhAddress?: string;
 		isPatched?: boolean;
+		isFlacPatched?: boolean;
 	}
 
 	interface Props {
 		detail: ColorDetail;
 		onclose: () => void;
 		onedit?: () => void;
+		onunlock?: () => void;
 	}
 
-	let { detail, onclose, onedit }: Props = $props();
+	let { detail, onclose, onedit, onunlock }: Props = $props();
 
 	const rgb565ToCss = (color: number): string => {
 		const r = Math.round(((color >> 11) & 0x1f) * 255 / 31);
@@ -130,9 +132,16 @@
 
 	const instructionHeaders = ['Key', 'Value'];
 
-	// Show Edit button only for Progress Bar and Marquee colors
+	// Show Edit button for Progress Bar, Marquee, and patched FLAC colors
 	const showEditButton = $derived(
-		detail.semantic.includes('Progress Bar') || detail.semantic.includes('Marquee Overlay')
+		detail.semantic.includes('Progress Bar') ||
+		detail.semantic.includes('Marquee Overlay') ||
+		(detail.semantic.includes('Codec Info') && detail.isFlacPatched)
+	);
+
+	// Show Unlock button for unpatched FLAC colors
+	const showUnlockButton = $derived(
+		detail.semantic.includes('Codec Info') && !detail.isFlacPatched
 	);
 </script>
 
@@ -176,7 +185,9 @@
 
 				<!-- Buttons -->
 				<div class="button-row">
-					{#if showEditButton && onedit}
+					{#if showUnlockButton && onunlock}
+						<Button onclick={onunlock}>Unlock</Button>
+					{:else if showEditButton && onedit}
 						<Button onclick={onedit}>Edit</Button>
 					{/if}
 					<div style="flex: 1;"></div>

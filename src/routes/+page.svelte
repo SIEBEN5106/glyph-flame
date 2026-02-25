@@ -386,8 +386,9 @@
     <WarningWindow
       title={fwState.warningTitle}
       message={fwState.warningMessage}
-      onconfirm={() => (fwState.showWarning = false)}
-      showCancel={false}
+      onconfirm={() => fwState.handleWarningConfirm()}
+      oncancel={() => fwState.handleWarningCancel()}
+      showCancel={fwState.pendingFlacUnlock}
     />
   {/if}
 
@@ -428,7 +429,12 @@
           fwState.openColorPicker('progress', detail.themeId ?? 0);
         } else if (detail.semantic.includes('Marquee Overlay')) {
           fwState.openColorPicker('marquee', detail.themeId ?? 0);
+        } else if (detail.semantic.includes('Codec Info') && fwState.flacPatched) {
+          fwState.openColorPicker('flac', detail.themeId ?? 0);
         }
+      }}
+      onunlock={() => {
+        fwState.showFlacUnlockWarning();
       }}
     />
   {/if}

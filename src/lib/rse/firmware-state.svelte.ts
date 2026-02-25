@@ -63,6 +63,7 @@ export interface ColorEntry {
   strhInstruction?: string;
   strhAddress?: string;
   isPatched?: boolean;
+  isFlacPatched?: boolean;
 }
 
 export interface SequenceReplacement {
@@ -118,9 +119,13 @@ export class FirmwareState {
   // Color picker state
   showColorPicker = $state(false);
   colorPickerTarget = $state<{
-    type: 'progress' | 'marquee';
+    type: 'progress' | 'marquee' | 'flac';
     themeId: number;
   } | null>(null);
+
+  // FLAC patch detection state
+  flacPatched = $state(false);
+  flacPatchAddress = $state<number | null>(null);
 
   // Warning dialog state
   showWarning = $state(false);
@@ -322,6 +327,26 @@ export class FirmwareState {
 
       if (!result.canPatch) {
         return;
+      }
+
+      // Detect FLAC patch status
+      const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
+      if (flacFunc && this.firmwareData) {
+        // Import PatchDetector dynamically to avoid circular dependencies
+        import('$lib/rse/theme/detector.js').then(({ PatchDetector }) => {
+          const detector = new PatchDetector(this.firmwareData!, 'Unknown');
+          // Find FLAC patch address by looking for the patch point
+          // The FLAC function has colorWrites that tell us where to patch
+          // For FLAC, we need to find where the CMP R1, #4 instruction is
+          // This is typically at or near the function start
+          const [isPatched] = detector.detectFlacPatch(flacFunc.addr);
+          this.flacPatched = isPatched;
+          this.flacPatchAddress = isPatched ? flacFunc.addr : null;
+        }).catch(() => {
+          // If detection fails, assume not patched
+          this.flacPatched = false;
+          this.flacPatchAddress = null;
+        });
       }
 
       // Extract Menu colors (R0-R14 typically)
@@ -640,9 +665,32 @@ export class FirmwareState {
   }
 
   openColorDetail(entry: ColorEntry) {
-    this.selectedColorDetail = entry;
+    // Include FLAC patch status for Codec Info colors
+    const detailWithFlacStatus = { ...entry };
+    if (entry.semantic.includes('Codec Info')) {
+      detailWithFlacStatus.isFlacPatched = this.flacPatched;
+    }
+    this.selectedColorDetail = detailWithFlacStatus;
     this.showColorDetail = true;
   }
+
+  showFlacUnlockWarning() {
+    this.showWarningDialog(
+      "Unlock FLAC Color Editing",
+      "⚠️ WARNING: This will modify the firmware to enable FLAC color customization.\n\n" +
+      "This operation:\n" +
+      "• Injects custom code into the firmware (NOP slide)\n" +
+      "• Modifies the FLAC function to use injected handlers\n" +
+      "• Cannot be easily undone\n" +
+      "• May affect firmware stability if done incorrectly\n\n" +
+      "It is recommended to backup your original firmware file before proceeding.\n\n" +
+      "Do you want to continue?"
+    );
+    // Store the pending FLAC unlock action
+    this.pendingFlacUnlock = true;
+  }
+
+  pendingFlacUnlock = $state(false);
 
   handleSelectNode(nodeId: string) {
     const node = this.findNodeById(this.treeNodes, nodeId);
@@ -732,6 +780,146 @@ export class FirmwareState {
     this.warningTitle = title;
     this.warningMessage = message;
     this.showWarning = true;
+  }
+
+  handleWarningConfirm() {
+    // Handle FLAC unlock confirmation
+    if (this.pendingFlacUnlock) {
+      this.pendingFlacUnlock = false;
+      this.performFlacUnlock();
+    }
+    this.showWarning = false;
+  }
+
+  handleWarningCancel() {
+    // Cancel FLAC unlock
+    if (this.pendingFlacUnlock) {
+      this.pendingFlacUnlock = false;
+      this.statusMessage = "FLAC unlock cancelled";
+    }
+    this.showWarning = false;
+  }
+
+  async performFlacUnlock() {
+    if (!this.firmwareData) {
+      this.showWarningDialog("Error", "No firmware loaded");
+      return;
+    }
+
+    this.isProcessing = true;
+    this.statusMessage = "Unlocking FLAC color editing...";
+
+    try {
+      // Extract current FLAC colors from firmware
+      const { extractThemeColors } = await import('$lib/rse/theme');
+      const result = extractThemeColors(this.firmwareData);
+
+      const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
+      if (!flacFunc) {
+        throw new Error("FLAC function not found in firmware");
+      }
+
+      // Extract current FLAC colors (using flacBehavior)
+      const currentFlacColors: number[] = [];
+      if (result.flacBehavior.isFlac) {
+        for (let themeId = 0; themeId < 5; themeId++) {
+          const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+          currentFlacColors[themeId] = color;
+        }
+      } else {
+        throw new Error("FLAC behavior not detected - cannot safely patch");
+      }
+
+      // Extract Menu colors (required for patching)
+      const menuFunc = result.themeFunctions.find(f => f.type === 'menu');
+      if (!menuFunc) {
+        throw new Error("Menu function not found - required for FLAC patching");
+      }
+
+      // Extract Menu colors
+      const currentMenuColors: number[] = [];
+      const writesByTheme: Map<number, import("$lib/rse/theme").ColorWrite[]> = new Map();
+      for (const write of menuFunc.colorWrites) {
+        const themeId = write.themeCondition ?? 0;
+        if (!writesByTheme.has(themeId)) {
+          writesByTheme.set(themeId, []);
+        }
+        writesByTheme.get(themeId)!.push(write);
+      }
+
+      // Process each theme's writes to get the final colors for R1, R2, R3
+      for (let themeId = 0; themeId < 5; themeId++) {
+        const themeWrites = writesByTheme.get(themeId) || [];
+        const themeColors: Map<number, number> = new Map();
+
+        for (const write of themeWrites) {
+          if (write.targetReg === 1 || write.targetReg === 2 || write.targetReg === 3) {
+            themeColors.set(write.targetReg, write.colorValue);
+          }
+        }
+
+        // Order: R1 (index 0-4), R2 (index 5-9), R3 (index 10-14)
+        currentMenuColors[themeId] = themeColors.get(1) ?? 0;
+        currentMenuColors[themeId + 5] = themeColors.get(2) ?? 0;
+        currentMenuColors[themeId + 10] = themeColors.get(3) ?? 0;
+      }
+
+      // Apply the patch using ThemePatcher
+      const { ThemePatcher } = await import('$lib/rse/theme/patcher.js');
+      const patcher = new ThemePatcher(this.firmwareData, 'Unknown');
+
+      // Create a temporary file for the patched firmware
+      const outputPath = '/tmp/temp_flac_unlock.bin';
+
+      // Apply FLAC and Menu patch
+      patcher.patch(
+        { flacColors: currentFlacColors, menuColors: currentMenuColors },
+        outputPath,
+        true  // write to file
+      );
+
+      // Read back the patched firmware
+      const patchedData = await import('$lib/rse/utils/file-io.js').then(m => m.fileIO.readFileSync(outputPath));
+
+      // Round-trip verification: extract colors from patched firmware
+      const verifyResult = extractThemeColors(patchedData);
+      const verifyFlacFunc = verifyResult.themeFunctions.find(f => f.type === 'flac');
+
+      if (!verifyFlacFunc) {
+        throw new Error("FLAC function not found in patched firmware - verification failed");
+      }
+
+      // Verify FLAC colors are preserved
+      if (verifyResult.flacBehavior.isFlac) {
+        for (let themeId = 0; themeId < 5; themeId++) {
+          const expectedColor = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+          const actualColor = themeId === 4 ? verifyResult.flacBehavior.colorFor4 : verifyResult.flacBehavior.colorForOther;
+
+          if (actualColor !== expectedColor) {
+            throw new Error(`FLAC color verification failed for theme ${themeId}: expected 0x${expectedColor.toString(16)}, got 0x${actualColor.toString(16)}`);
+          }
+        }
+      }
+
+      // Update firmware data
+      this.firmwareData = patchedData;
+      this.flacPatched = true;
+
+      // Refresh color data
+      this.buildColorTree();
+
+      // Update the selected color detail if it's a FLAC color
+      if (this.selectedColorDetail && this.selectedColorDetail.semantic.includes('Codec Info')) {
+        this.selectedColorDetail = { ...this.selectedColorDetail, isFlacPatched: true };
+      }
+
+      this.statusMessage = "FLAC color editing unlocked successfully! You can now edit FLAC colors.";
+    } catch (err) {
+      this.showWarningDialog("FLAC Unlock Failed", `Failed to unlock FLAC color editing:\n${err instanceof Error ? err.message : String(err)}`);
+      this.statusMessage = "FLAC unlock failed";
+    } finally {
+      this.isProcessing = false;
+    }
   }
 
   isFontFile(file: File): boolean {
@@ -1271,6 +1459,208 @@ export class FirmwareState {
     this.colorPickerTarget = null;
   }
 
+  /**
+   * Rebuild color entries from extraction result
+   * Extracts color entries for all color types and updates this.colorData
+   */
+  rebuildColorEntries(result: import('$lib/rse/theme').AnalysisResult) {
+    // Extract colors again using the same logic as buildColorTree
+    const menuColorEntries: ColorEntry[] = [];
+    const flacColorEntries: ColorEntry[] = [];
+    const progressColorEntries: ColorEntry[] = [];
+    const marqueeColorEntries: ColorEntry[] = [];
+
+    const registerMeaning: Record<number, string> = {
+      1: 'Highlight',
+      2: 'Secondary',
+      3: 'Foreground'
+    };
+
+    for (const func of result.themeFunctions) {
+      if (func.type === 'menu' || func.uiElement.includes('Menu')) {
+        // Group writes by their themeCondition
+        const writesByTheme: Map<number, import("$lib/rse/theme").ColorWrite[]> = new Map();
+        for (const write of func.colorWrites) {
+          const themeId = write.themeCondition ?? 0;
+          if (!writesByTheme.has(themeId)) {
+            writesByTheme.set(themeId, []);
+          }
+          writesByTheme.get(themeId)!.push(write);
+        }
+
+        // Process each theme's writes separately
+        for (const [targetTheme, themeWrites] of writesByTheme) {
+          const themeColors: Map<number, ColorEntry> = new Map();
+
+          for (const write of themeWrites) {
+            if (write.targetReg !== 1 && write.targetReg !== 2 && write.targetReg !== 3) {
+              continue;
+            }
+
+            const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+            const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+
+            let movwAddr: string | undefined;
+            let movwInstr: string | undefined;
+            if (write.movwInstr) {
+              movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
+              movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+            } else if (write.sourceReg === 12) {
+              movwAddr = undefined;
+              movwInstr = '(preload)';
+            }
+
+            const registerMeaningKey = registerMeaning[write.targetReg] ?? `R${write.targetReg}`;
+
+            const colorEntry: ColorEntry = {
+              semantic: registerMeaningKey,
+              color: write.colorValue,
+              themeId: targetTheme,
+              register: write.targetReg,
+              movwAddress: movwAddr,
+              movwInstruction: movwInstr,
+              strhAddress: strhAddr,
+              strhInstruction: strhInstr,
+              isPatched: false
+            };
+
+            themeColors.set(write.targetReg, colorEntry);
+          }
+
+          for (const [, entry] of themeColors) {
+            menuColorEntries.push(entry);
+          }
+        }
+      }
+
+      if (func.type === 'flac' || func.uiElement.includes('FLAC')) {
+        if (result.flacBehavior.isFlac) {
+          const movwAddr4 = result.flacBehavior.movwAddr4 || '-';
+          const movwInstr4 = result.flacBehavior.movwInstr4 || '-';
+          const movwAddrOther = result.flacBehavior.movwAddrOther || '-';
+          const movwInstrOther = result.flacBehavior.movwInstrOther || '-';
+
+          let strhAddr = '-';
+          let strhInstr = '-';
+          if (func.colorWrites.length > 0) {
+            const write = func.colorWrites[0];
+            strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+            strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+          }
+
+          for (let themeId = 0; themeId < 5; themeId++) {
+            const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+            const movwAddr = themeId === 4 ? movwAddr4 : movwAddrOther;
+            const movwInstr = themeId === 4 ? movwInstr4 : movwInstrOther;
+
+            flacColorEntries.push({
+              semantic: 'Codec Info',
+              color: color,
+              themeId: themeId,
+              register: undefined,
+              movwAddress: movwAddr === '-' ? undefined : movwAddr,
+              movwInstruction: movwInstr === '-' ? undefined : movwInstr,
+              strhAddress: strhAddr === '-' ? undefined : strhAddr,
+              strhInstruction: strhInstr === '-' ? undefined : strhInstr,
+              isPatched: false,
+              isFlacPatched: this.flacPatched
+            });
+          }
+        } else {
+          for (const write of func.colorWrites) {
+            const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+            const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+
+            let movwAddr: string | undefined;
+            let movwInstr: string | undefined;
+            if (write.movwInstr) {
+              movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
+              movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+            }
+
+            flacColorEntries.push({
+              semantic: 'Codec Info',
+              color: write.colorValue,
+              themeId: write.themeCondition ?? undefined,
+              register: write.sourceReg,
+              movwAddress: movwAddr,
+              movwInstruction: movwInstr,
+              strhAddress: strhAddr,
+              strhInstruction: strhInstr,
+              isPatched: false,
+              isFlacPatched: this.flacPatched
+            });
+          }
+        }
+      }
+
+      if (func.type === 'progress') {
+        for (let themeId = 0; themeId < 5; themeId++) {
+          const color = func.preloadColors[themeId] ?? 0;
+          const movwRecord = func.preloadMovwRecords?.[themeId];
+
+          let movwAddr: string | undefined;
+          let movwInstr: string | undefined;
+          if (movwRecord) {
+            movwAddr = '0x' + movwRecord.addr.toString(16).toUpperCase().padStart(5, '0');
+            movwInstr = `${movwRecord.instr.mnemonic} ${movwRecord.instr.operands}`;
+          }
+
+          progressColorEntries.push({
+            semantic: 'Progress Bar',
+            color: color,
+            themeId: themeId,
+            register: undefined,
+            movwAddress: movwAddr,
+            movwInstruction: movwInstr,
+            strhAddress: undefined,
+            strhInstruction: undefined,
+            isPatched: false
+          });
+        }
+      }
+
+      if (func.type === 'marquee') {
+        for (let themeId = 0; themeId < 5; themeId++) {
+          const color = func.preloadColors[themeId] ?? 0;
+          const movwRecord = func.preloadMovwRecords?.[themeId];
+
+          let movwAddr: string | undefined;
+          let movwInstr: string | undefined;
+          if (movwRecord) {
+            movwAddr = '0x' + movwRecord.addr.toString(16).toUpperCase().padStart(5, '0');
+            movwInstr = `${movwRecord.instr.mnemonic} ${movwRecord.instr.operands}`;
+          }
+
+          marqueeColorEntries.push({
+            semantic: 'Marquee Overlay',
+            color: color,
+            themeId: themeId,
+            register: undefined,
+            movwAddress: movwAddr,
+            movwInstruction: movwInstr,
+            strhAddress: undefined,
+            strhInstruction: undefined,
+            isPatched: false
+          });
+        }
+      }
+    }
+
+    // Remove duplicates
+    const uniqueMenuColors = this.deduplicateColors(menuColorEntries);
+    const uniqueFlacColors = this.deduplicateColors(flacColorEntries);
+    const uniqueProgressColors = this.deduplicateColors(progressColorEntries);
+    const uniqueMarqueeColors = this.deduplicateColors(marqueeColorEntries);
+
+    this.colorData = {
+      menuColors: uniqueMenuColors,
+      flacColors: uniqueFlacColors,
+      progressColors: uniqueProgressColors,
+      marqueeColors: uniqueMarqueeColors
+    };
+  }
+
   async handleColorSelect(rgb: { r: number; g: number; b: number }) {
     if (!this.colorPickerTarget || !this.firmwareData) return;
 
@@ -1286,10 +1676,158 @@ export class FirmwareState {
       const rgb565 = (r5 << 11) | (g5 << 5) | b5;
 
       // Import patching functions dynamically to avoid circular dependencies
-      const { ThemeColorExtractor } = await import('$lib/rse/theme/extractor.js');
+      const { ThemeColorExtractor, extractThemeColors } = await import('$lib/rse/theme');
       const { patchSwitchCaseFunction } = await import('$lib/rse/theme/switch-case-patcher.js');
 
-      // Extract theme functions to find the target function
+      // FLAC color editing (requires full patch re-application)
+      if (type === 'flac') {
+        if (!this.flacPatched) {
+          throw new Error("FLAC color editing is not unlocked. Please unlock first.");
+        }
+
+        // Extract current FLAC and Menu colors from firmware
+        const result = extractThemeColors(this.firmwareData);
+        const flacFunc = result.themeFunctions.find(f => f.type === 'flac');
+        const menuFunc = result.themeFunctions.find(f => f.type === 'menu');
+
+        if (!flacFunc || !menuFunc) {
+          throw new Error("FLAC or Menu function not found in firmware");
+        }
+
+        // Extract current FLAC colors
+        const currentFlacColors: number[] = [];
+        if (result.flacBehavior.isFlac) {
+          for (let i = 0; i < 5; i++) {
+            currentFlacColors[i] = i === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+          }
+          currentFlacColors[themeId] = rgb565;  // Update the selected theme color
+        } else {
+          throw new Error("FLAC behavior not detected - cannot edit");
+        }
+
+        // Extract current Menu colors
+        const currentMenuColors: number[] = [];
+        const writesByTheme: Map<number, import("$lib/rse/theme").ColorWrite[]> = new Map();
+        for (const write of menuFunc.colorWrites) {
+          const tId = write.themeCondition ?? 0;
+          if (!writesByTheme.has(tId)) {
+            writesByTheme.set(tId, []);
+          }
+          writesByTheme.get(tId)!.push(write);
+        }
+
+        for (let tId = 0; tId < 5; tId++) {
+          const themeWrites = writesByTheme.get(tId) || [];
+          const themeColors: Map<number, number> = new Map();
+          for (const write of themeWrites) {
+            if (write.targetReg === 1 || write.targetReg === 2 || write.targetReg === 3) {
+              themeColors.set(write.targetReg, write.colorValue);
+            }
+          }
+          currentMenuColors[tId] = themeColors.get(1) ?? 0;
+          currentMenuColors[tId + 5] = themeColors.get(2) ?? 0;
+          currentMenuColors[tId + 10] = themeColors.get(3) ?? 0;
+        }
+
+        // Apply FLAC and Menu patch using ThemePatcher
+        const { ThemePatcher } = await import('$lib/rse/theme/patcher.js');
+        const patcher = new ThemePatcher(this.firmwareData, 'Unknown');
+
+        const outputPath = '/tmp/temp_flac_edit.bin';
+        patcher.patch(
+          { flacColors: currentFlacColors, menuColors: currentMenuColors },
+          outputPath,
+          true  // write to file
+        );
+
+        // Read back the patched firmware
+        const { fileIO } = await import('$lib/rse/utils/file-io.js');
+        const patchedData = fileIO.readFileSync(outputPath);
+
+        // Round-trip verification: extract colors from patched firmware
+        const verifyResult = extractThemeColors(patchedData);
+
+        if (!verifyResult.flacBehavior.isFlac) {
+          throw new Error("FLAC behavior not found in patched firmware");
+        }
+
+        // Verify FLAC colors
+        for (let i = 0; i < 5; i++) {
+          const expectedColor = currentFlacColors[i];
+          const actualColor = i === 4 ? verifyResult.flacBehavior.colorFor4 : verifyResult.flacBehavior.colorForOther;
+
+          if (actualColor !== expectedColor) {
+            throw new Error(`FLAC color verification failed for theme ${i}: expected 0x${expectedColor.toString(16)}, got 0x${actualColor.toString(16)}`);
+          }
+        }
+
+        // Verify Menu colors weren't affected
+        const verifyMenuFunc = verifyResult.themeFunctions.find(f => f.type === 'menu');
+        if (verifyMenuFunc) {
+          const verifyWritesByTheme: Map<number, import("$lib/rse/theme").ColorWrite[]> = new Map();
+          for (const write of verifyMenuFunc.colorWrites) {
+            const tId = write.themeCondition ?? 0;
+            if (!verifyWritesByTheme.has(tId)) {
+              verifyWritesByTheme.set(tId, []);
+            }
+            verifyWritesByTheme.get(tId)!.push(write);
+          }
+
+          for (let tId = 0; tId < 5; tId++) {
+            const themeWrites = verifyWritesByTheme.get(tId) || [];
+            const themeColors: Map<number, number> = new Map();
+            for (const write of themeWrites) {
+              if (write.targetReg === 1 || write.targetReg === 2 || write.targetReg === 3) {
+                themeColors.set(write.targetReg, write.colorValue);
+              }
+            }
+
+            const r1 = themeColors.get(1) ?? 0;
+            const r2 = themeColors.get(2) ?? 0;
+            const r3 = themeColors.get(3) ?? 0;
+
+            if (r1 !== currentMenuColors[tId]) {
+              throw new Error(`Menu R1 color for theme ${tId} was modified: expected 0x${currentMenuColors[tId].toString(16)}, got 0x${r1.toString(16)}`);
+            }
+            if (r2 !== currentMenuColors[tId + 5]) {
+              throw new Error(`Menu R2 color for theme ${tId} was modified: expected 0x${currentMenuColors[tId + 5].toString(16)}, got 0x${r2.toString(16)}`);
+            }
+            if (r3 !== currentMenuColors[tId + 10]) {
+              throw new Error(`Menu R3 color for theme ${tId} was modified: expected 0x${currentMenuColors[tId + 10].toString(16)}, got 0x${r3.toString(16)}`);
+            }
+          }
+        }
+
+        // Update firmware data
+        this.firmwareData = patchedData;
+
+        // Refresh color data using the extraction logic
+        const result2 = extractThemeColors(this.firmwareData);
+
+        if (result2.themeFunctions.length === 0) {
+          throw new Error("No theme functions found in patched firmware");
+        }
+
+        // Rebuild color tree with updated data
+        this.rebuildColorEntries(result2);
+
+        this.statusMessage = `Successfully updated FLAC color for theme ${themeId} to RGB(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+        this.showColorPicker = false;
+        this.colorPickerTarget = null;
+
+        // Re-open the color detail with updated data
+        if (this.selectedColorDetail) {
+          const updatedEntry = this.colorData?.flacColors.find(c => c.themeId === themeId);
+          if (updatedEntry) {
+            this.selectedColorDetail = { ...updatedEntry, isFlacPatched: true };
+          }
+        }
+
+        this.isProcessing = false;
+        return;
+      }
+
+      // Progress Bar and Marquee color editing (switch_case patching)
       const extractor = new ThemeColorExtractor(this.firmwareData);
       const extractResult = extractor.extract();
 
@@ -1349,199 +1887,8 @@ export class FirmwareState {
         throw new Error("No theme functions found in patched firmware");
       }
 
-      // Extract colors again using the same logic as buildColorTree
-      const menuColorEntries: ColorEntry[] = [];
-      const flacColorEntries: ColorEntry[] = [];
-      const progressColorEntries: ColorEntry[] = [];
-      const marqueeColorEntries: ColorEntry[] = [];
-
-      const registerMeaning: Record<number, string> = {
-        1: 'Highlight',
-        2: 'Secondary',
-        3: 'Foreground'
-      };
-
-      for (const func of result.themeFunctions) {
-        if (func.type === 'menu' || func.uiElement.includes('Menu')) {
-          // Group writes by their themeCondition
-          const writesByTheme: Map<number, import("$lib/rse/theme").ColorWrite[]> = new Map();
-          for (const write of func.colorWrites) {
-            const themeId = write.themeCondition ?? 0;
-            if (!writesByTheme.has(themeId)) {
-              writesByTheme.set(themeId, []);
-            }
-            writesByTheme.get(themeId)!.push(write);
-          }
-
-          // Process each theme's writes separately
-          for (const [targetTheme, themeWrites] of writesByTheme) {
-            const themeColors: Map<number, ColorEntry> = new Map();
-
-            for (const write of themeWrites) {
-              if (write.targetReg !== 1 && write.targetReg !== 2 && write.targetReg !== 3) {
-                continue;
-              }
-
-              const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
-              const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
-
-              let movwAddr: string | undefined;
-              let movwInstr: string | undefined;
-              if (write.movwInstr) {
-                movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
-                movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
-              } else if (write.sourceReg === 12) {
-                movwAddr = undefined;
-                movwInstr = '(preload)';
-              }
-
-              const registerMeaningKey = registerMeaning[write.targetReg] ?? `R${write.targetReg}`;
-
-              const colorEntry: ColorEntry = {
-                semantic: registerMeaningKey,
-                color: write.colorValue,
-                themeId: targetTheme,
-                register: write.targetReg,
-                movwAddress: movwAddr,
-                movwInstruction: movwInstr,
-                strhAddress: strhAddr,
-                strhInstruction: strhInstr,
-                isPatched: false
-              };
-
-              themeColors.set(write.targetReg, colorEntry);
-            }
-
-            for (const [, entry] of themeColors) {
-              menuColorEntries.push(entry);
-            }
-          }
-        }
-
-        if (func.type === 'flac' || func.uiElement.includes('FLAC')) {
-          if (result.flacBehavior.isFlac) {
-            const movwAddr4 = result.flacBehavior.movwAddr4 || '-';
-            const movwInstr4 = result.flacBehavior.movwInstr4 || '-';
-            const movwAddrOther = result.flacBehavior.movwAddrOther || '-';
-            const movwInstrOther = result.flacBehavior.movwInstrOther || '-';
-
-            let strhAddr = '-';
-            let strhInstr = '-';
-            if (func.colorWrites.length > 0) {
-              const write = func.colorWrites[0];
-              strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
-              strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
-            }
-
-            for (let themeId = 0; themeId < 5; themeId++) {
-              const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
-              const movwAddr = themeId === 4 ? movwAddr4 : movwAddrOther;
-              const movwInstr = themeId === 4 ? movwInstr4 : movwInstrOther;
-
-              flacColorEntries.push({
-                semantic: 'Codec Info',
-                color: color,
-                themeId: themeId,
-                register: undefined,
-                movwAddress: movwAddr === '-' ? undefined : movwAddr,
-                movwInstruction: movwInstr === '-' ? undefined : movwInstr,
-                strhAddress: strhAddr === '-' ? undefined : strhAddr,
-                strhInstruction: strhInstr === '-' ? undefined : strhInstr,
-                isPatched: false
-              });
-            }
-          } else {
-            for (const write of func.colorWrites) {
-              const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
-              const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
-
-              let movwAddr: string | undefined;
-              let movwInstr: string | undefined;
-              if (write.movwInstr) {
-                movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
-                movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
-              }
-
-              flacColorEntries.push({
-                semantic: 'Codec Info',
-                color: write.colorValue,
-                themeId: write.themeCondition ?? undefined,
-                register: write.sourceReg,
-                movwAddress: movwAddr,
-                movwInstruction: movwInstr,
-                strhAddress: strhAddr,
-                strhInstruction: strhInstr,
-                isPatched: false
-              });
-            }
-          }
-        }
-
-        if (func.type === 'progress') {
-          for (let themeId = 0; themeId < 5; themeId++) {
-            const color = func.preloadColors[themeId] ?? 0;
-            const movwRecord = func.preloadMovwRecords?.[themeId];
-
-            let movwAddr: string | undefined;
-            let movwInstr: string | undefined;
-            if (movwRecord) {
-              movwAddr = '0x' + movwRecord.addr.toString(16).toUpperCase().padStart(5, '0');
-              movwInstr = `${movwRecord.instr.mnemonic} ${movwRecord.instr.operands}`;
-            }
-
-            progressColorEntries.push({
-              semantic: 'Progress Bar',
-              color: color,
-              themeId: themeId,
-              register: undefined,
-              movwAddress: movwAddr,
-              movwInstruction: movwInstr,
-              strhAddress: undefined,
-              strhInstruction: undefined,
-              isPatched: false
-            });
-          }
-        }
-
-        if (func.type === 'marquee') {
-          for (let themeId = 0; themeId < 5; themeId++) {
-            const color = func.preloadColors[themeId] ?? 0;
-            const movwRecord = func.preloadMovwRecords?.[themeId];
-
-            let movwAddr: string | undefined;
-            let movwInstr: string | undefined;
-            if (movwRecord) {
-              movwAddr = '0x' + movwRecord.addr.toString(16).toUpperCase().padStart(5, '0');
-              movwInstr = `${movwRecord.instr.mnemonic} ${movwRecord.instr.operands}`;
-            }
-
-            marqueeColorEntries.push({
-              semantic: 'Marquee Overlay',
-              color: color,
-              themeId: themeId,
-              register: undefined,
-              movwAddress: movwAddr,
-              movwInstruction: movwInstr,
-              strhAddress: undefined,
-              strhInstruction: undefined,
-              isPatched: false
-            });
-          }
-        }
-      }
-
-      // Remove duplicates
-      const uniqueMenuColors = this.deduplicateColors(menuColorEntries);
-      const uniqueFlacColors = this.deduplicateColors(flacColorEntries);
-      const uniqueProgressColors = this.deduplicateColors(progressColorEntries);
-      const uniqueMarqueeColors = this.deduplicateColors(marqueeColorEntries);
-
-      this.colorData = {
-        menuColors: uniqueMenuColors,
-        flacColors: uniqueFlacColors,
-        progressColors: uniqueProgressColors,
-        marqueeColors: uniqueMarqueeColors
-      };
+      // Rebuild color entries with updated data
+      this.rebuildColorEntries(result);
 
       this.statusMessage = `Successfully updated ${type} color for theme ${themeId} to RGB(${rgb.r}, ${rgb.g}, ${rgb.b})`;
       this.showColorPicker = false;
