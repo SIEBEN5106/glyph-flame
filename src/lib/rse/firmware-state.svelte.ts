@@ -227,9 +227,10 @@ export class FirmwareState {
 
                 if (opType === 'unlock') {
                   // FLAC unlock completed successfully
-                  this.flacPatched = true;
+                  // buildColorTree() has already detected the patch status from the firmware
+                  // Force update the selected color detail to reflect the new status
                   if (this.selectedColorDetail && this.selectedColorDetail.semantic.includes('Codec Info')) {
-                    this.selectedColorDetail = { ...this.selectedColorDetail, isFlacPatched: true };
+                    this.selectedColorDetail = { ...this.selectedColorDetail };
                   }
                   this.progress = 100;
                   this.statusMessage = "FLAC color editing unlocked successfully!";
@@ -254,7 +255,7 @@ export class FirmwareState {
                     if (this.selectedColorDetail) {
                       const updatedEntry = this.colorData?.flacColors.find(c => c.themeId === themeId);
                       if (updatedEntry) {
-                        this.selectedColorDetail = { ...updatedEntry, isFlacPatched: true };
+                        this.selectedColorDetail = { ...updatedEntry, isFlacPatched: this.flacPatched };
                       }
                     }
                   }, 500);
@@ -936,6 +937,9 @@ export class FirmwareState {
     this.loadingTitle = "Unlocking FLAC Color Editing";
     this.progress = 10;
     this.statusMessage = "Patching firmware...";
+
+    // Let the UI render the loading window before doing heavy work
+    await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
 
     try {
       // Extract current FLAC colors from firmware
@@ -1835,6 +1839,9 @@ export class FirmwareState {
         this.showLoadingWindow = true;
         this.loadingTitle = "Updating FLAC Color";
         this.progress = 10;
+
+        // Let the UI render the loading window before doing heavy work
+        await new Promise(resolve => requestAnimationFrame(() => resolve(undefined)));
 
         try {
           // Get firmware from worker (single source of truth)
