@@ -590,7 +590,7 @@ export class FirmwareState {
                 movwInstruction: movwInstr === '-' ? undefined : movwInstr,
                 strhAddress: strhAddr === '-' ? undefined : strhAddr,
                 strhInstruction: strhInstr === '-' ? undefined : strhInstr,
-                isPatched: false
+                isPatched: this.flacPatched
               });
             }
           } else {
@@ -615,7 +615,7 @@ export class FirmwareState {
                 movwInstruction: movwInstr,
                 strhAddress: strhAddr,
                 strhInstruction: strhInstr,
-                isPatched: false
+                isPatched: this.flacPatched
               });
             }
           }
@@ -1713,7 +1713,7 @@ export class FirmwareState {
               movwInstruction: movwInstr === '-' ? undefined : movwInstr,
               strhAddress: strhAddr === '-' ? undefined : strhAddr,
               strhInstruction: strhInstr === '-' ? undefined : strhInstr,
-              isPatched: false,
+              isPatched: this.flacPatched,
               isFlacPatched: this.flacPatched
             });
           }
@@ -1738,7 +1738,7 @@ export class FirmwareState {
               movwInstruction: movwInstr,
               strhAddress: strhAddr,
               strhInstruction: strhInstr,
-              isPatched: false,
+              isPatched: this.flacPatched,
               isFlacPatched: this.flacPatched
             });
           }
