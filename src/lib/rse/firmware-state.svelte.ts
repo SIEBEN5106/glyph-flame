@@ -931,26 +931,22 @@ export class FirmwareState {
       // Apply the patch using ThemePatcher
       const patcher = new ThemePatcher(firmwareData, 'Unknown');
 
-      // Create a temporary file for the patched firmware
-      const outputPath = '/tmp/temp_flac_unlock.bin';
-
-      // Apply FLAC and Menu patch
-      try {
-        patcher.patch(
-          { flacColors: currentFlacColors, menuColors: currentMenuColors },
-          outputPath,
-          true  // write to file
-        );
-      } catch (patchError) {
-        throw new Error(`Patcher.patch() failed: ${patchError instanceof Error ? patchError.message : String(patchError)}`);
-      }
-
-      // Read back the patched firmware
+      // Apply FLAC and Menu patch (get patched data directly, no file I/O)
       let patchedData: Uint8Array;
       try {
-        patchedData = fileIO.readFileSync(outputPath);
-      } catch (readError) {
-        throw new Error(`Failed to read patched firmware: ${readError instanceof Error ? readError.message : String(readError)}`);
+        const patchResult = patcher.patch(
+          { flacColors: currentFlacColors, menuColors: currentMenuColors },
+          '',  // outputPath not used when writeFile=false
+          false  // don't write to file, return patched data instead
+        );
+
+        if (!patchResult.patchedData) {
+          throw new Error('Patcher did not return patched data');
+        }
+
+        patchedData = patchResult.patchedData;
+      } catch (patchError) {
+        throw new Error(`Patcher.patch() failed: ${patchError instanceof Error ? patchError.message : String(patchError)}`);
       }
 
       // Round-trip verification: extract colors from patched firmware
@@ -1820,15 +1816,18 @@ export class FirmwareState {
         // Apply FLAC and Menu patch using ThemePatcher
         const patcher = new ThemePatcher(firmwareData, 'Unknown');
 
-        const outputPath = '/tmp/temp_flac_edit.bin';
-        patcher.patch(
+        // Apply patch (get patched data directly, no file I/O)
+        const patchResult = patcher.patch(
           { flacColors: currentFlacColors, menuColors: currentMenuColors },
-          outputPath,
-          true  // write to file
+          '',  // outputPath not used when writeFile=false
+          false  // don't write to file, return patched data instead
         );
 
-        // Read back the patched firmware
-        const patchedData = fileIO.readFileSync(outputPath);
+        if (!patchResult.patchedData) {
+          throw new Error('Patcher did not return patched data');
+        }
+
+        const patchedData = patchResult.patchedData;
 
         // Round-trip verification: extract colors from patched firmware
         const verifyResult = extractThemeColors(patchedData);

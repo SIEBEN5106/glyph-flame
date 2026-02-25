@@ -723,8 +723,11 @@ export class ThemePatcher {
 				}
 			}
 
+			console.error('[DEBUG] Step 1: NOP slide selection and safety check completed');
+
 			// Create patch data (skip safety check for re-patch)
 			const patchData = this.createPatchData(flacColors, menuColors, nopSlide, isRepatch);
+			console.error('[DEBUG] Step 2: createPatchData() completed');
 
 			// Apply patches
 			const patchedData = new Uint8Array(this.data);
@@ -755,9 +758,11 @@ export class ThemePatcher {
 					newBytes: this.bytesToHex(patchedData.slice(menuFunc.patchAddr, menuFunc.patchAddr + 4))
 				};
 			}
+			console.error('[DEBUG] Step 3: BL instruction patches applied');
 
 			// Write patch code to NOP slide
 			this.writePatchCode(patchedData, nopSlide, patchData);
+			console.error('[DEBUG] Step 4: Patch code written to NOP slide');
 
 			// Write metadata (using dynamic address from createPatchData)
 			const metadata = createPatchMetadata(
@@ -766,20 +771,32 @@ export class ThemePatcher {
 				menuColors
 			);
 			const metadataBytes = writePatchMetadata(metadata);
+			console.error(`[DEBUG] Step 5: Writing ${metadataBytes.length} bytes of metadata to 0x${patchData.metadataAddr.toString(16)}`);
 			patchedData.set(metadataBytes, patchData.metadataAddr);
+			console.error('[DEBUG] Step 5: Metadata written successfully');
 
 			// Write to file if requested
 			if (writeFile) {
+				console.error(`[DEBUG] Step 6: Writing patched firmware to ${outputPath}`);
 				fileIO.writeFileSync(outputPath, patchedData);
+				console.error('[DEBUG] Step 6: File written successfully');
 			}
 
 			return {
 				success: true,
 				nopSlide,
 				metadataAddr: patchData.metadataAddr,
-				patchPoints
+				patchPoints,
+				patchedData: writeFile ? undefined : patchedData
 			};
 		} catch (error) {
+			// Log the actual error before wrapping it
+			console.error('[ERROR] Patch failed with error:', error);
+			if (error instanceof Error) {
+				console.error('[ERROR] Error name:', error.name);
+				console.error('[ERROR] Error message:', error.message);
+				console.error('[ERROR] Error stack:', error.stack);
+			}
 			throwThemeError(error, PatchError, 'Failed to patch firmware');
 		}
 	}

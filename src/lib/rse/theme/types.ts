@@ -256,6 +256,8 @@ export interface PatchResult {
 	readonly patchPoints: Readonly<Record<string, PatchPoint>>;
 	/** Address where metadata was stored */
 	readonly metadataAddr: number;
+	/** Patched firmware data (only included when writeFile=false) */
+	readonly patchedData?: Uint8Array;
 }
 
 /**
