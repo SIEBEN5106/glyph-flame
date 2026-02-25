@@ -18,7 +18,6 @@ import { UNICODE_RANGES } from "$lib/rse/utils/unicode-ranges";
 import { debugMode, debugAnimationComplete } from "$lib/stores";
 import { extractThemeColors, type ColorWrite } from "$lib/rse/theme";
 import { PatchDetector } from "$lib/rse/theme/detector.js";
-import { ThemePatcher } from "$lib/rse/theme/patcher.js";
 import { ThemeColorExtractor } from "$lib/rse/theme/extractor.js";
 import { patchSwitchCaseFunction } from "$lib/rse/theme/switch-case-patcher.js";
 import { discoverFlacFunction } from "$lib/rse/theme/discovery.js";
@@ -1001,26 +1000,41 @@ export class FirmwareState {
       this.progress = 30;
       this.statusMessage = "Applying FLAC patch...";
 
-      // Apply the patch using ThemePatcher
-      const patcher = new ThemePatcher(firmwareData, 'Unknown');
-
-      // Apply FLAC and Menu patch (get patched data directly, no file I/O)
-      let patchedData: Uint8Array;
-      try {
-        const patchResult = patcher.patch(
-          { flacColors: currentFlacColors, menuColors: currentMenuColors },
-          '',  // outputPath not used when writeFile=false
-          false  // don't write to file, return patched data instead
-        );
-
-        if (!patchResult.patchedData) {
-          throw new Error('Patcher did not return patched data');
-        }
-
-        patchedData = patchResult.patchedData;
-      } catch (patchError) {
-        throw new Error(`Patcher.patch() failed: ${patchError instanceof Error ? patchError.message : String(patchError)}`);
-      }
+      // Apply the patch using the worker (non-blocking)
+      const patchedData = await new Promise<Uint8Array>((resolve, reject) => {
+        const handler = (e: MessageEvent) => {
+          const { type, id: responseId, result, error } = e.data;
+          if (responseId === "patchTheme") {
+            if (type === "success") {
+              this.worker!.removeEventListener("message", handler);
+              const patchResult = result as { patchedData: Uint8Array; nopSlide: { start: number; end: number; size: number }; metadataAddr: number };
+              resolve(patchResult.patchedData);
+            } else if (type === "progress") {
+              const data = e.data as { message: string };
+              this.statusMessage = data.message;
+              // Update progress based on the message
+              if (data.message.includes("Preparing")) {
+                this.progress = 35;
+              } else if (data.message.includes("Analyzing")) {
+                this.progress = 45;
+              } else if (data.message.includes("applied")) {
+                this.progress = 55;
+              }
+            } else if (type === "error") {
+              this.worker!.removeEventListener("message", handler);
+              reject(new Error(error || "Worker patching failed"));
+            }
+          }
+        };
+        this.worker!.addEventListener("message", handler);
+        this.worker!.postMessage({
+          type: "patchTheme",
+          id: "patchTheme",
+          firmware: firmwareData,
+          flacColors: currentFlacColors,
+          menuColors: currentMenuColors,
+        });
+      });
 
       this.progress = 60;
       this.statusMessage = "Verifying patch...";
@@ -1900,21 +1914,41 @@ export class FirmwareState {
           this.progress = 40;
           this.statusMessage = "Applying patch...";
 
-          // Apply FLAC and Menu patch using ThemePatcher
-          const patcher = new ThemePatcher(firmwareData, 'Unknown');
-
-          // Apply patch (get patched data directly, no file I/O)
-          const patchResult = patcher.patch(
-            { flacColors: currentFlacColors, menuColors: currentMenuColors },
-            '',  // outputPath not used when writeFile=false
-            false  // don't write to file, return patched data instead
-          );
-
-          if (!patchResult.patchedData) {
-            throw new Error('Patcher did not return patched data');
-          }
-
-          const patchedData = patchResult.patchedData;
+          // Apply FLAC and Menu patch using the worker (non-blocking)
+          const patchedData = await new Promise<Uint8Array>((resolve, reject) => {
+            const handler = (e: MessageEvent) => {
+              const { type, id: responseId, result, error } = e.data;
+              if (responseId === "patchThemeEdit") {
+                if (type === "success") {
+                  this.worker!.removeEventListener("message", handler);
+                  const patchResult = result as { patchedData: Uint8Array; nopSlide: { start: number; end: number; size: number }; metadataAddr: number };
+                  resolve(patchResult.patchedData);
+                } else if (type === "progress") {
+                  const data = e.data as { message: string };
+                  this.statusMessage = data.message;
+                  // Update progress based on the message
+                  if (data.message.includes("Preparing")) {
+                    this.progress = 45;
+                  } else if (data.message.includes("Analyzing")) {
+                    this.progress = 50;
+                  } else if (data.message.includes("applied")) {
+                    this.progress = 55;
+                  }
+                } else if (type === "error") {
+                  this.worker!.removeEventListener("message", handler);
+                  reject(new Error(error || "Worker patching failed"));
+                }
+              }
+            };
+            this.worker!.addEventListener("message", handler);
+            this.worker!.postMessage({
+              type: "patchTheme",
+              id: "patchThemeEdit",
+              firmware: firmwareData,
+              flacColors: currentFlacColors,
+              menuColors: currentMenuColors,
+            });
+          });
 
           this.progress = 60;
           this.statusMessage = "Verifying patch...";

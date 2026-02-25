@@ -539,11 +539,11 @@ export class ThemeDiscovery {
 		const functions: ThemeFunction[] = [];
 		const seenAddrs = new Set<number>();
 
-		// Search for FLAC function
-		const flacResult = ThemeDiscovery.detectFlacFunction(data);
+		// Search for FLAC function using improved discovery (supports patched firmware)
+		const flacResult = discoverFlacFunction(data);
 		if (flacResult) {
-			const [addr] = flacResult;
-			const funcStart = ThemeDiscovery.findFunctionStart(data, addr);
+			const [funcAddr] = flacResult;
+			const funcStart = ThemeDiscovery.findFunctionStart(data, funcAddr);
 			if (!seenAddrs.has(funcStart)) {
 				seenAddrs.add(funcStart);
 				const funcEnd = this.findFunctionEnd(funcStart, 500);
@@ -563,11 +563,11 @@ export class ThemeDiscovery {
 			}
 		}
 
-		// Search for Menu function
-		const menuResult = ThemeDiscovery.detectMenuFunction(data);
+		// Search for Menu function using improved discovery (supports patched firmware)
+		const menuResult = discoverMenuFunction(data);
 		if (menuResult) {
-			const [addr] = menuResult;
-			const funcStart = ThemeDiscovery.findFunctionStart(data, addr);
+			const [funcAddr] = menuResult;
+			const funcStart = ThemeDiscovery.findFunctionStart(data, funcAddr);
 			if (!seenAddrs.has(funcStart)) {
 				seenAddrs.add(funcStart);
 				const funcEnd = this.findFunctionEnd(funcStart, 500);

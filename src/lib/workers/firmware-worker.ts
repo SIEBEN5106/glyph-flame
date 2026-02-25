@@ -17,6 +17,7 @@ import { buildBitmapListFromMetadata } from "../rse/utils/metadata";
 import { convertToBmp, isValidFontData } from "../rse/utils/bitmap";
 import { TOFU_PADDING } from "../rse/utils/glyph-renderer";
 import { TofuDetector } from "../rse/utils/tofu-detection";
+import { ThemePatcher } from "../rse/theme/patcher.js";
 
 // Constants
 const SMALL_STRIDE = 32;
@@ -193,7 +194,8 @@ interface WorkerRequest {
     | "getFirmware"
     | "bundleImagesAsZip"
     | "replaceFontsWorker" // Complete font replacement in worker
-    | "analyzeFonts"; // Analyze font with tofu detection
+    | "analyzeFonts" // Analyze font with tofu detection
+    | "patchTheme"; // Apply theme colors patch (FLAC/Menu)
   id: string;
   firmware: Uint8Array;
   fontType?: "SMALL" | "LARGE";
@@ -218,6 +220,9 @@ interface WorkerRequest {
   fontFamily?: string; // Font family name to use
   fontSize?: 12 | 16; // Font size
   codePoints?: number[]; // Code points to extract
+  // Theme patching fields
+  flacColors?: number[]; // FLAC theme colors (5 values)
+  menuColors?: number[]; // Menu theme colors (15 values)
 }
 
 interface FontPlaneInfo {
@@ -283,6 +288,12 @@ interface ReplaceFontsResult {
   fontType: "SMALL" | "LARGE"; // Which font type was replaced
 }
 
+interface PatchThemeResult {
+  patchedData: Uint8Array;
+  nopSlide: { start: number; end: number; size: number };
+  metadataAddr: number;
+}
+
 type WorkerResponse =
   | {
       type: "success";
@@ -295,6 +306,7 @@ type WorkerResponse =
         | ReplaceImageResult
         | ReplaceImagesResult
         | ReplaceFontsResult
+        | PatchThemeResult
         | Uint8Array;
     }
   | { type: "progress"; id: string; message: string }
@@ -1581,6 +1593,74 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
             id,
             error: `Font replacement failed: ${errorMsg}`,
             details: errorStack,
+          });
+        }
+        break;
+      }
+
+      case "patchTheme": {
+        const { firmware, flacColors, menuColors } = e.data as WorkerRequest & {
+          firmware: Uint8Array;
+          flacColors?: number[];
+          menuColors?: number[];
+        };
+
+        if (!flacColors || !menuColors) {
+          self.postMessage({
+            type: "error",
+            id,
+            error: "Missing flacColors or menuColors for patchTheme",
+          });
+          return;
+        }
+
+        self.postMessage({
+          type: "progress",
+          id,
+          message: "Preparing to patch firmware...",
+        });
+
+        try {
+          const patcher = new ThemePatcher(firmware, "Unknown");
+
+          self.postMessage({
+            type: "progress",
+            id,
+            message: "Analyzing firmware structure...",
+          });
+
+          // Apply the patch (return patched data, don't write file)
+          const patchResult = patcher.patch(
+            { flacColors, menuColors },
+            "", // outputPath not used when writeFile=false
+            false // don't write to file, return patched data instead
+          );
+
+          if (!patchResult.patchedData) {
+            throw new Error("Patcher did not return patched data");
+          }
+
+          self.postMessage({
+            type: "progress",
+            id,
+            message: "Patch applied successfully!",
+          });
+
+          // Return the patched firmware data
+          self.postMessage({
+            type: "success",
+            id,
+            result: {
+              patchedData: patchResult.patchedData,
+              nopSlide: patchResult.nopSlide,
+              metadataAddr: patchResult.metadataAddr,
+            } as PatchThemeResult,
+          });
+        } catch (err) {
+          self.postMessage({
+            type: "error",
+            id,
+            error: `Patching failed: ${err instanceof Error ? err.message : String(err)}`,
           });
         }
         break;

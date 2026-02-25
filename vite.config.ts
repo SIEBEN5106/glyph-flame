@@ -4,6 +4,12 @@ import { sveltekit } from '@sveltejs/kit/vite';
 
 export default defineConfig({
 	plugins: [sveltekit()],
+	// Configure workers to use ES module format instead of IIFE
+	// This is needed because workers that import complex modules with code-splitting
+	// (like ThemePatcher) cannot use IIFE format
+	worker: {
+		format: 'es'
+	},
 	test: {
 		expect: { requireAssertions: true },
 		projects: [
