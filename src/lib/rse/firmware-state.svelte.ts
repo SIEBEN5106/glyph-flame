@@ -305,6 +305,9 @@ export class FirmwareState {
         children: [],
       }));
 
+    // Preserve existing non-font nodes (images, colors) during rebuild
+    const existingNodes = this.treeNodes.slice(1).filter(n => n.id !== "fonts");
+
     this.treeNodes = [
       {
         id: "fonts",
@@ -325,7 +328,7 @@ export class FirmwareState {
           },
         ],
       },
-      ...(this.treeNodes.length > 1 ? [this.treeNodes[1]] : []),
+      ...existingNodes,
     ];
   }
 
@@ -348,7 +351,13 @@ export class FirmwareState {
     };
 
     if (this.treeNodes.length > 0 && this.treeNodes[0].id === "fonts") {
-      this.treeNodes = [this.treeNodes[0], imagesNode];
+      // Insert or replace images node after fonts node, preserve other nodes (like colors)
+      const imagesIndex = this.treeNodes.findIndex(n => n.id === "images");
+      if (imagesIndex !== -1) {
+        this.treeNodes[imagesIndex] = imagesNode;
+      } else {
+        this.treeNodes = [this.treeNodes[0], imagesNode, ...this.treeNodes.slice(1)];
+      }
     } else {
       this.treeNodes = [...this.treeNodes, imagesNode];
     }
@@ -668,8 +677,15 @@ export class FirmwareState {
         children: [menuColorNode, flacColorNode, progressColorNode, marqueeColorNode]
       };
 
-      // Add to tree nodes
-      this.treeNodes = [...this.treeNodes, colorsNode];
+      // Check if colors node already exists and update it in-place to preserve expanded state
+      const existingColorsIndex = this.treeNodes.findIndex(n => n.id === 'colors');
+      if (existingColorsIndex !== -1) {
+        // Update existing node in-place to preserve the array reference
+        this.treeNodes[existingColorsIndex] = colorsNode;
+      } else {
+        // Add to tree nodes if it doesn't exist
+        this.treeNodes = [...this.treeNodes, colorsNode];
+      }
     } catch (error) {
       // Log error for debugging
       console.error('Error building color tree:', error);
@@ -722,13 +738,12 @@ export class FirmwareState {
   showFlacUnlockWarning() {
     this.showWarningDialog(
       "Unlock FLAC Color Editing",
-      "⚠️ WARNING: This will modify the firmware to enable FLAC color customization.\n\n" +
+      "This will modify the firmware to enable FLAC color customization.\n\n" +
       "This operation:\n" +
-      "• Injects custom code into the firmware (NOP slide)\n" +
-      "• Modifies the FLAC function to use injected handlers\n" +
-      "• Cannot be easily undone\n" +
-      "• May affect firmware stability if done incorrectly\n\n" +
-      "It is recommended to backup your original firmware file before proceeding.\n\n" +
+      "- Injects custom code into the firmware (NOP slide)\n" +
+      "- Modifies the FLAC function to use injected handlers\n" +
+      "- Cannot be easily undone\n" +
+      "- May affect firmware stability if done incorrectly\n\n" +
       "Do you want to continue?"
     );
     // Store the pending FLAC unlock action
@@ -953,9 +968,7 @@ export class FirmwareState {
       });
       this.flacPatched = true;
 
-      // Refresh color data
-      await this.buildColorTree();
-
+      
       // Update the selected color detail if it's a FLAC color
       if (this.selectedColorDetail && this.selectedColorDetail.semantic.includes('Codec Info')) {
         this.selectedColorDetail = { ...this.selectedColorDetail, isFlacPatched: true };
