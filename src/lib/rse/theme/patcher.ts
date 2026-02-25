@@ -562,8 +562,14 @@ export class ThemePatcher {
 			}
 		}
 
-		// Now call the internal implementation with both color sets
-		return this.patchImpl(flacColors!, menuColors!, outputPath, writeFile);
+		// Now call the internal implementation with both color sets and intent flags
+		return this.patchImpl(
+			flacColors!,
+			menuColors!,
+			outputPath,
+			writeFile,
+			{ flacCustom: !!options.flacColors, menuCustom: !!options.menuColors }
+		);
 	}
 
 	/**
@@ -580,7 +586,7 @@ export class ThemePatcher {
 		outputPath: string,
 		writeFile = true
 	): PatchResult {
-		return this.patchImpl(flacColors, menuColors, outputPath, writeFile);
+		return this.patchImpl(flacColors, menuColors, outputPath, writeFile, { flacCustom: true, menuCustom: true });
 	}
 
 	/**
@@ -591,7 +597,8 @@ export class ThemePatcher {
 		flacColors: number[],
 		menuColors: number[],
 		outputPath: string,
-		writeFile = true
+		writeFile = true,
+		intent: { flacCustom: boolean; menuCustom: boolean } = { flacCustom: true, menuCustom: true }
 	): PatchResult {
 		try {
 			// Validate color counts
@@ -726,16 +733,16 @@ export class ThemePatcher {
 			console.error('[DEBUG] Step 1: NOP slide selection and safety check completed');
 
 			// Create patch data (skip safety check for re-patch)
-			const patchData = this.createPatchData(flacColors, menuColors, nopSlide, isRepatch);
+			const patchData = this.createPatchData(flacColors, menuColors, nopSlide, isRepatch, intent);
 			console.error('[DEBUG] Step 2: createPatchData() completed');
 
 			// Apply patches
 			const patchedData = new Uint8Array(this.data);
 			const patchPoints: Record<string, PatchPoint> = {};
 
-			// Patch FLAC function
+			// Patch FLAC function only if flacCustom is true
 			const flacFunc = analysis.themeFunctions.find(f => f.type === 'flac');
-			if (flacFunc) {
+			if (flacFunc && intent.flacCustom && patchData.flacCodeAddr !== 0) {
 				this.applyPatch(patchedData, flacFunc.patchAddr, patchData.flacCodeAddr);
 				patchPoints['flac'] = {
 					type: 'flac',
@@ -746,9 +753,9 @@ export class ThemePatcher {
 				};
 			}
 
-			// Patch Menu function
+			// Patch Menu function only if menuCustom is true
 			const menuFunc = analysis.themeFunctions.find(f => f.type === 'menu');
-			if (menuFunc) {
+			if (menuFunc && intent.menuCustom && patchData.menuCodeAddr !== 0) {
 				this.applyPatch(patchedData, menuFunc.patchAddr, patchData.menuCodeAddr);
 				patchPoints['menu'] = {
 					type: 'menu',
@@ -761,7 +768,7 @@ export class ThemePatcher {
 			console.error('[DEBUG] Step 3: BL instruction patches applied');
 
 			// Write patch code to NOP slide
-			this.writePatchCode(patchedData, nopSlide, patchData);
+			this.writePatchCode(patchedData, nopSlide, patchData, isRepatch ? intent : undefined);
 			console.error('[DEBUG] Step 4: Patch code written to NOP slide');
 
 			// Write metadata (using dynamic address from createPatchData)
@@ -806,20 +813,23 @@ export class ThemePatcher {
 	 *
 	 * Layout is dynamically calculated:
 	 * - Start: Protection/reserved area (configurable, default 32 bytes for B instruction)
-	 * - After protection: FLAC handler code
-	 * - After FLAC (aligned): Menu handler code
+	 * - After protection: FLAC handler code (if flacCustom)
+	 * - After FLAC (aligned): Menu handler code (if menuCustom)
 	 * - End: Metadata
 	 *
-	 * @param isRepatch - Skip safety checks when re-patching existing firmware
+	 * @param isRepatchInput - Skip safety checks when re-patching existing firmware
+	 * @param intent - Which functions are being intentionally patched
 	 */
 	private createPatchData(
 		flacColors: number[],
 		menuColors: number[],
 		nopSlide: NopSlide,
-		isRepatch = false
+		isRepatchInput = false,
+		intent: { flacCustom: boolean; menuCustom: boolean } = { flacCustom: true, menuCustom: true }
 	): { flacCodeAddr: number; menuCodeAddr: number; code: Uint8Array; metadataAddr: number } {
 		// DEBUG: Log input NOP slide
 		console.error(`[DEBUG] createPatchData: nopSlide.start = 0x${nopSlide.start.toString(16)}, size = ${nopSlide.size}`);
+		console.error(`[DEBUG] createPatchData: flacCustom=${intent.flacCustom}, menuCustom=${intent.menuCustom}`);
 
 		// Calculate metadata size from the actual metadata structure
 		const metadata = createPatchMetadata(
@@ -835,53 +845,87 @@ export class ThemePatcher {
 		const ALIGNMENT = 4;
 
 		// Generate handlers first so we know their sizes
-		const flacHandler = this.generateFlacHandler(flacColors);
-		const menuHandler = this.generateMenuHandler(menuColors);
+		const actualFlacHandler = this.generateFlacHandler(flacColors);
+		const actualMenuHandler = this.generateMenuHandler(menuColors);
 
-		// Calculate padding to ensure FLAC handler is 4-byte aligned
-		// The NOP slide start might not be aligned, so we add padding
-		const flacCodeOffset = (ALIGNMENT - (nopSlide.start % ALIGNMENT)) % ALIGNMENT;
-		const flacCodeEnd = flacCodeOffset + flacHandler.length;
+		// During re-patching, always use both handlers to ensure consistent layout
+		// This prevents issues when adding a handler that didn't exist before
+		const useBothHandlers = isRepatchInput;
 
-		// Align menu handler start
-		const menuCodeOffset = Math.ceil(flacCodeEnd / ALIGNMENT) * ALIGNMENT;
-		const menuCodeEnd = menuCodeOffset + menuHandler.length;
+		// Determine which handlers to include in code buffer
+		const flacHandler = (intent.flacCustom || useBothHandlers) ? actualFlacHandler : new Uint8Array(0);
+		const menuHandler = (intent.menuCustom || useBothHandlers) ? actualMenuHandler : new Uint8Array(0);
+
+		// Calculate layout using actual handler sizes
+		let flacCodeOffset = 0;
+		let flacCodeEnd = 0;
+		let menuCodeOffset = 0;
+		let menuCodeEnd = 0;
+
+		if (actualFlacHandler.length > 0 && (intent.flacCustom || useBothHandlers)) {
+			// Calculate padding to ensure FLAC handler is 4-byte aligned
+			flacCodeOffset = (ALIGNMENT - (nopSlide.start % ALIGNMENT)) % ALIGNMENT;
+			flacCodeEnd = flacCodeOffset + actualFlacHandler.length;
+
+			if (actualMenuHandler.length > 0 && (intent.menuCustom || useBothHandlers)) {
+				// Align menu handler start
+				menuCodeOffset = Math.ceil(flacCodeEnd / ALIGNMENT) * ALIGNMENT;
+				menuCodeEnd = menuCodeOffset + actualMenuHandler.length;
+			}
+		} else if (actualMenuHandler.length > 0 && (intent.menuCustom || useBothHandlers)) {
+			// Only menu handler, still align it
+			menuCodeOffset = (ALIGNMENT - (nopSlide.start % ALIGNMENT)) % ALIGNMENT;
+			menuCodeEnd = menuCodeOffset + actualMenuHandler.length;
+		}
 
 		// Metadata goes at the end
 		const metadataOffset = nopSlide.size - METADATA_SIZE;
 
-		// Calculate absolute addresses
-		const flacCodeAddr = nopSlide.start + flacCodeOffset;
-		const menuCodeAddr = nopSlide.start + menuCodeOffset;
+		// Calculate absolute addresses (0 if handler not generated)
+		const flacCodeAddr = actualFlacHandler.length > 0 ? (nopSlide.start + flacCodeOffset) : 0;
+		const menuCodeAddr = actualMenuHandler.length > 0 ? (nopSlide.start + menuCodeOffset) : 0;
 		const metadataAddr = nopSlide.start + metadataOffset;
 
+		// Calculate actual end of code
+		const codeEnd = actualMenuHandler.length > 0 ? menuCodeEnd : flacCodeEnd;
+
 		// Verify everything fits
-		if (menuCodeEnd > metadataOffset) {
+		if (codeEnd > metadataOffset) {
 			throw new CapacityError(
 				`Not enough space in NOP slide:\n` +
 				`  Available: ${nopSlide.size} bytes\n` +
-				`  FLAC handler: ${flacHandler.length} bytes (offset ${flacCodeOffset})\n` +
-				`  Menu handler: ${menuHandler.length} bytes (offset ${menuCodeOffset})\n` +
+				(actualFlacHandler.length > 0 ? `  FLAC handler: ${actualFlacHandler.length} bytes (offset ${flacCodeOffset})\n` : '') +
+				(actualMenuHandler.length > 0 ? `  Menu handler: ${actualMenuHandler.length} bytes (offset ${menuCodeOffset})\n` : '') +
 				`  Metadata: ${METADATA_SIZE} bytes (offset ${metadataOffset})\n` +
-				`  Required: ${menuCodeEnd + METADATA_SIZE} bytes\n` +
-				`  Short by: ${menuCodeEnd - metadataOffset} bytes`
+				`  Required: ${codeEnd + METADATA_SIZE} bytes\n` +
+				`  Short by: ${codeEnd - metadataOffset} bytes`
 			);
 		}
 
 		// SAFETY CHECK: Verify all bytes to be overwritten are NOPs (0x00)
 		// Skip safety check when re-patching since we're overwriting our own code
-		if (!isRepatch) {
-			this.verifyNopSlideSafety(nopSlide, [
-				{ start: nopSlide.start + flacCodeOffset, end: nopSlide.start + flacCodeEnd, name: 'FLAC handler' },
-				{ start: nopSlide.start + menuCodeOffset, end: nopSlide.start + menuCodeEnd, name: 'Menu handler' },
-				{ start: metadataAddr, end: nopSlide.end, name: 'metadata' }
-			]);
+		if (!isRepatchInput) {
+			const ranges: { start: number; end: number; name: string }[] = [];
+			if (actualFlacHandler.length > 0) {
+				ranges.push({ start: nopSlide.start + flacCodeOffset, end: nopSlide.start + flacCodeEnd, name: 'FLAC handler' });
+			}
+			if (actualMenuHandler.length > 0) {
+				ranges.push({ start: nopSlide.start + menuCodeOffset, end: nopSlide.start + menuCodeEnd, name: 'Menu handler' });
+			}
+			ranges.push({ start: metadataAddr, end: nopSlide.end, name: 'metadata' });
+			this.verifyNopSlideSafety(nopSlide, ranges);
 		}
 
 		// Build the complete code buffer
 		const code = new Uint8Array(nopSlide.size);
-		code.set(flacHandler, flacCodeOffset);
-		code.set(menuHandler, menuCodeOffset);
+
+		// Set handlers
+		if (flacHandler.length > 0) {
+			code.set(actualFlacHandler, flacCodeOffset);
+		}
+		if (menuHandler.length > 0) {
+			code.set(actualMenuHandler, menuCodeOffset);
+		}
 		// Metadata will be written separately in patch() method
 
 		return {
@@ -1036,16 +1080,58 @@ export class ThemePatcher {
 
 	/**
 	 * Write patch code to NOP slide
+	 *
+	 * During re-patching with intent, only updates the sections being modified.
+	 * Preserves existing handlers for functions not being re-patched.
 	 */
 	private writePatchCode(
 		data: Uint8Array,
 		nopSlide: NopSlide,
-		patchData: { flacCodeAddr: number; menuCodeAddr: number; code: Uint8Array }
+		patchData: { flacCodeAddr: number; menuCodeAddr: number; code: Uint8Array; metadataAddr: number },
+		intent?: { flacCustom: boolean; menuCustom: boolean }
 	): void {
-		console.error(`[DEBUG] writePatchCode: writing ${patchData.code.length} bytes to 0x${nopSlide.start.toString(16)}`);
-		console.error(`[DEBUG] writePatchCode: first 8 bytes = ${Array.from(patchData.code.slice(0, 8)).map(b => '0x' + b.toString(16)).join(' ')}`);
-		data.set(patchData.code, nopSlide.start);
-		console.error(`[DEBUG] writePatchCode: done. First 8 bytes in data = ${Array.from(data.slice(nopSlide.start, nopSlide.start + 8)).map(b => '0x' + b.toString(16)).join(' ')}`);
+		const start = nopSlide.start;
+		const code = patchData.code;
+
+		if (intent) {
+			// Re-patching: selectively update sections
+			console.error(`[DEBUG] writePatchCode (re-patch): flacCustom=${intent.flacCustom}, menuCustom=${intent.menuCustom}`);
+
+			// Write FLAC handler if updating FLAC
+			if (intent.flacCustom && patchData.flacCodeAddr > 0) {
+				const flacOffset = patchData.flacCodeAddr - start;
+				// Calculate FLAC handler size by looking for alignment padding
+				// Next handler (if any) or metadata starts after FLAC
+				let flacSize = code.length;
+				if (intent.menuCustom && patchData.menuCodeAddr > 0) {
+					flacSize = patchData.menuCodeAddr - patchData.flacCodeAddr;
+				} else {
+					// Only FLAC, metadata is at the end
+					flacSize = patchData.metadataAddr - patchData.flacCodeAddr;
+				}
+				data.set(code.subarray(flacOffset, flacOffset + flacSize), patchData.flacCodeAddr);
+				console.error(`[DEBUG] writePatchCode: Updated FLAC handler (${flacSize} bytes at 0x${patchData.flacCodeAddr.toString(16)})`);
+			}
+
+			// Write Menu handler if updating Menu
+			if (intent.menuCustom && patchData.menuCodeAddr > 0) {
+				const menuOffset = patchData.menuCodeAddr - start;
+				// Menu handler goes until metadata
+				const menuSize = patchData.metadataAddr - patchData.menuCodeAddr;
+				data.set(code.subarray(menuOffset, menuOffset + menuSize), patchData.menuCodeAddr);
+				console.error(`[DEBUG] writePatchCode: Updated Menu handler (${menuSize} bytes at 0x${patchData.menuCodeAddr.toString(16)})`);
+			}
+
+			// Always write metadata
+			const metadataSize = 51; // Metadata is always 51 bytes
+			data.set(code.subarray(code.length - metadataSize), patchData.metadataAddr);
+			console.error(`[DEBUG] writePatchCode: Updated metadata (${metadataSize} bytes at 0x${patchData.metadataAddr.toString(16)})`);
+		} else {
+			// Initial patch: write entire buffer
+			console.error(`[DEBUG] writePatchCode: writing ${code.length} bytes to 0x${start.toString(16)}`);
+			data.set(code, start);
+			console.error(`[DEBUG] writePatchCode: done`);
+		}
 	}
 
 	/**
