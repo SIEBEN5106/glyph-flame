@@ -84,7 +84,6 @@
 
 	.image-info {
 		margin-top: 8px;
-		font-size: 12px;
 		color: #000000;
 		text-align: center;
 	}

@@ -124,7 +124,6 @@
 
 	.warning-text p {
 		margin: 0;
-		font-size: 12px;
 		color: #000000;
 		white-space: pre-wrap;
 		word-wrap: break-word;

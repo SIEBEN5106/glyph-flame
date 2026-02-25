@@ -131,7 +131,6 @@
 
   .error-text p {
     margin: 4px 0;
-    font-size: 12px;
     color: #000000;
     white-space: pre-wrap;
     word-wrap: break-word;
@@ -162,7 +161,6 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 8px;
-    font-size: 12px;
     font-weight: bold;
   }
 

@@ -143,7 +143,6 @@
 
   .debug-info p {
     margin: 4px 0;
-    font-size: 12px;
   }
 
   .debug-items {
@@ -174,7 +173,6 @@
     justify-content: space-between;
     align-items: center;
     margin-bottom: 8px;
-    font-size: 12px;
     font-weight: bold;
   }
 

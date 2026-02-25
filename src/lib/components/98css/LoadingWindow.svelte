@@ -150,7 +150,6 @@
 
   .loading-message {
     margin: 12px 0 0 0;
-    font-size: 12px;
     color: #000000;
     text-align: center;
   }

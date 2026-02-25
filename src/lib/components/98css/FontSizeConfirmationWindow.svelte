@@ -127,7 +127,6 @@
 
 	.message p {
 		margin: 0;
-		font-size: 12px;
 		color: #000000;
 		white-space: pre-wrap;
 		word-wrap: break-word;
@@ -147,7 +146,6 @@
 	}
 
 	.radio-options :global(label) {
-		font-size: 12px;
 		cursor: pointer;
 	}
 
@@ -183,7 +181,6 @@
 	}
 
 	.size-label {
-		font-size: 12px;
 		font-weight: bold;
 		color: #000080;
 	}

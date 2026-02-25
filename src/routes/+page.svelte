@@ -642,7 +642,6 @@
   }
 
   .plane-header p {
-    font-size: 12px;
     margin: 4px 0;
   }
 
