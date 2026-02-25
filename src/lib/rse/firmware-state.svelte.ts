@@ -115,6 +115,13 @@ export class FirmwareState {
   showColorDetail = $state(false);
   selectedColorDetail = $state<ColorEntry | null>(null);
 
+  // Color picker state
+  showColorPicker = $state(false);
+  colorPickerTarget = $state<{
+    type: 'progress' | 'marquee';
+    themeId: number;
+  } | null>(null);
+
   // Warning dialog state
   showWarning = $state(false);
   warningTitle = $state("");
@@ -1260,6 +1267,307 @@ export class FirmwareState {
       });
     } catch (err) {
       this.showWarningDialog("Replacement Failed", `Failed to process ${file.name}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      this.isProcessing = false;
+    }
+  }
+
+  openColorPicker(type: 'progress' | 'marquee', themeId: number) {
+    this.colorPickerTarget = { type, themeId };
+    this.showColorPicker = true;
+  }
+
+  closeColorPicker() {
+    this.showColorPicker = false;
+    this.colorPickerTarget = null;
+  }
+
+  async handleColorSelect(rgb: { r: number; g: number; b: number }) {
+    if (!this.colorPickerTarget || !this.firmwareData) return;
+
+    const { type, themeId } = this.colorPickerTarget;
+    this.isProcessing = true;
+    this.statusMessage = `Updating ${type} color for theme ${themeId}...`;
+
+    try {
+      // Convert RGB to RGB565
+      const r5 = Math.round((rgb.r / 255) * 31);
+      const g5 = Math.round((rgb.g / 255) * 63);
+      const b5 = Math.round((rgb.b / 255) * 31);
+      const rgb565 = (r5 << 11) | (g5 << 5) | b5;
+
+      // Import patching functions dynamically to avoid circular dependencies
+      const { ThemeColorExtractor } = await import('$lib/rse/theme/extractor.js');
+      const { patchSwitchCaseFunction } = await import('$lib/rse/theme/switch-case-patcher.js');
+
+      // Extract theme functions to find the target function
+      const extractor = new ThemeColorExtractor(this.firmwareData);
+      const extractResult = extractor.extract();
+
+      const targetFunc = extractResult.themeFunctions.find(f => f.type === type);
+      if (!targetFunc) {
+        throw new Error(`${type} function not found in firmware`);
+      }
+
+      // Clone firmware data to avoid modifying the original
+      const patchedFirmware = new Uint8Array(this.firmwareData);
+
+      // Get current colors - preloadColors is a Record<number, number>
+      const currentColors = targetFunc.preloadColors ?? {};
+      const colorsToUpdate: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        colorsToUpdate[i] = currentColors[i] ?? 0;
+      }
+      colorsToUpdate[themeId] = rgb565;
+
+      // Apply the patch directly
+      patchSwitchCaseFunction(patchedFirmware, targetFunc, colorsToUpdate);
+
+      // Round-trip verification: extract colors from patched firmware
+      const verifyExtractor = new ThemeColorExtractor(patchedFirmware);
+      const verifyResult = verifyExtractor.extract();
+      const verifyFunc = verifyResult.themeFunctions.find(f => f.type === type);
+
+      if (!verifyFunc) {
+        throw new Error(`${type} function not found in patched firmware`);
+      }
+
+      const updatedColorsRecord = verifyFunc.preloadColors ?? {};
+      const updatedColors: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        updatedColors[i] = updatedColorsRecord[i] ?? 0;
+      }
+
+      // Verify the specific color was applied correctly
+      if (updatedColors[themeId] !== rgb565) {
+        throw new Error(`Round-trip verification failed: expected 0x${rgb565.toString(16)}, got 0x${updatedColors[themeId].toString(16)}`);
+      }
+
+      // Verify other colors weren't affected
+      for (let i = 0; i < 5; i++) {
+        if (i !== themeId && updatedColors[i] !== colorsToUpdate[i]) {
+          throw new Error(`Color ${i} was modified: expected 0x${colorsToUpdate[i].toString(16)}, got 0x${updatedColors[i].toString(16)}`);
+        }
+      }
+
+      // Update firmware data
+      this.firmwareData = patchedFirmware;
+
+      // Refresh color data using the extraction logic
+      const result = extractThemeColors(this.firmwareData);
+
+      if (result.themeFunctions.length === 0) {
+        throw new Error("No theme functions found in patched firmware");
+      }
+
+      // Extract colors again using the same logic as buildColorTree
+      const menuColorEntries: ColorEntry[] = [];
+      const flacColorEntries: ColorEntry[] = [];
+      const progressColorEntries: ColorEntry[] = [];
+      const marqueeColorEntries: ColorEntry[] = [];
+
+      const registerMeaning: Record<number, string> = {
+        1: 'Highlight',
+        2: 'Secondary',
+        3: 'Foreground'
+      };
+
+      for (const func of result.themeFunctions) {
+        if (func.type === 'menu' || func.uiElement.includes('Menu')) {
+          // Group writes by their themeCondition
+          const writesByTheme: Map<number, import("$lib/rse/theme").ColorWrite[]> = new Map();
+          for (const write of func.colorWrites) {
+            const themeId = write.themeCondition ?? 0;
+            if (!writesByTheme.has(themeId)) {
+              writesByTheme.set(themeId, []);
+            }
+            writesByTheme.get(themeId)!.push(write);
+          }
+
+          // Process each theme's writes separately
+          for (const [targetTheme, themeWrites] of writesByTheme) {
+            const themeColors: Map<number, ColorEntry> = new Map();
+
+            for (const write of themeWrites) {
+              if (write.targetReg !== 1 && write.targetReg !== 2 && write.targetReg !== 3) {
+                continue;
+              }
+
+              const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+              const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+
+              let movwAddr: string | undefined;
+              let movwInstr: string | undefined;
+              if (write.movwInstr) {
+                movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
+                movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+              } else if (write.sourceReg === 12) {
+                movwAddr = undefined;
+                movwInstr = '(preload)';
+              }
+
+              const registerMeaningKey = registerMeaning[write.targetReg] ?? `R${write.targetReg}`;
+
+              const colorEntry: ColorEntry = {
+                semantic: registerMeaningKey,
+                color: write.colorValue,
+                themeId: targetTheme,
+                register: write.targetReg,
+                movwAddress: movwAddr,
+                movwInstruction: movwInstr,
+                strhAddress: strhAddr,
+                strhInstruction: strhInstr,
+                isPatched: false
+              };
+
+              themeColors.set(write.targetReg, colorEntry);
+            }
+
+            for (const [, entry] of themeColors) {
+              menuColorEntries.push(entry);
+            }
+          }
+        }
+
+        if (func.type === 'flac' || func.uiElement.includes('FLAC')) {
+          if (result.flacBehavior.isFlac) {
+            const movwAddr4 = result.flacBehavior.movwAddr4 || '-';
+            const movwInstr4 = result.flacBehavior.movwInstr4 || '-';
+            const movwAddrOther = result.flacBehavior.movwAddrOther || '-';
+            const movwInstrOther = result.flacBehavior.movwInstrOther || '-';
+
+            let strhAddr = '-';
+            let strhInstr = '-';
+            if (func.colorWrites.length > 0) {
+              const write = func.colorWrites[0];
+              strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+              strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+            }
+
+            for (let themeId = 0; themeId < 5; themeId++) {
+              const color = themeId === 4 ? result.flacBehavior.colorFor4 : result.flacBehavior.colorForOther;
+              const movwAddr = themeId === 4 ? movwAddr4 : movwAddrOther;
+              const movwInstr = themeId === 4 ? movwInstr4 : movwInstrOther;
+
+              flacColorEntries.push({
+                semantic: 'Codec Info',
+                color: color,
+                themeId: themeId,
+                register: undefined,
+                movwAddress: movwAddr === '-' ? undefined : movwAddr,
+                movwInstruction: movwInstr === '-' ? undefined : movwInstr,
+                strhAddress: strhAddr === '-' ? undefined : strhAddr,
+                strhInstruction: strhInstr === '-' ? undefined : strhInstr,
+                isPatched: false
+              });
+            }
+          } else {
+            for (const write of func.colorWrites) {
+              const strhAddr = '0x' + write.addr.toString(16).toUpperCase().padStart(5, '0');
+              const strhInstr = write.instr ? `${write.instr.mnemonic} ${write.instr.operands}` : 'STRH';
+
+              let movwAddr: string | undefined;
+              let movwInstr: string | undefined;
+              if (write.movwInstr) {
+                movwAddr = '0x' + write.movwInstr.addr.toString(16).toUpperCase().padStart(5, '0');
+                movwInstr = `${write.movwInstr.instr.mnemonic} ${write.movwInstr.instr.operands}`;
+              }
+
+              flacColorEntries.push({
+                semantic: 'Codec Info',
+                color: write.colorValue,
+                themeId: write.themeCondition ?? undefined,
+                register: write.sourceReg,
+                movwAddress: movwAddr,
+                movwInstruction: movwInstr,
+                strhAddress: strhAddr,
+                strhInstruction: strhInstr,
+                isPatched: false
+              });
+            }
+          }
+        }
+
+        if (func.type === 'progress') {
+          for (let themeId = 0; themeId < 5; themeId++) {
+            const color = func.preloadColors[themeId] ?? 0;
+            const movwRecord = func.preloadMovwRecords?.[themeId];
+
+            let movwAddr: string | undefined;
+            let movwInstr: string | undefined;
+            if (movwRecord) {
+              movwAddr = '0x' + movwRecord.addr.toString(16).toUpperCase().padStart(5, '0');
+              movwInstr = `${movwRecord.instr.mnemonic} ${movwRecord.instr.operands}`;
+            }
+
+            progressColorEntries.push({
+              semantic: 'Progress Bar',
+              color: color,
+              themeId: themeId,
+              register: undefined,
+              movwAddress: movwAddr,
+              movwInstruction: movwInstr,
+              strhAddress: undefined,
+              strhInstruction: undefined,
+              isPatched: false
+            });
+          }
+        }
+
+        if (func.type === 'marquee') {
+          for (let themeId = 0; themeId < 5; themeId++) {
+            const color = func.preloadColors[themeId] ?? 0;
+            const movwRecord = func.preloadMovwRecords?.[themeId];
+
+            let movwAddr: string | undefined;
+            let movwInstr: string | undefined;
+            if (movwRecord) {
+              movwAddr = '0x' + movwRecord.addr.toString(16).toUpperCase().padStart(5, '0');
+              movwInstr = `${movwRecord.instr.mnemonic} ${movwRecord.instr.operands}`;
+            }
+
+            marqueeColorEntries.push({
+              semantic: 'Marquee Overlay',
+              color: color,
+              themeId: themeId,
+              register: undefined,
+              movwAddress: movwAddr,
+              movwInstruction: movwInstr,
+              strhAddress: undefined,
+              strhInstruction: undefined,
+              isPatched: false
+            });
+          }
+        }
+      }
+
+      // Remove duplicates
+      const uniqueMenuColors = this.deduplicateColors(menuColorEntries);
+      const uniqueFlacColors = this.deduplicateColors(flacColorEntries);
+      const uniqueProgressColors = this.deduplicateColors(progressColorEntries);
+      const uniqueMarqueeColors = this.deduplicateColors(marqueeColorEntries);
+
+      this.colorData = {
+        menuColors: uniqueMenuColors,
+        flacColors: uniqueFlacColors,
+        progressColors: uniqueProgressColors,
+        marqueeColors: uniqueMarqueeColors
+      };
+
+      this.statusMessage = `Successfully updated ${type} color for theme ${themeId} to RGB(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+      this.showColorPicker = false;
+      this.colorPickerTarget = null;
+
+      // Re-open the color detail with updated data
+      if (this.selectedColorDetail) {
+        const updatedEntry = (type === 'progress' ? this.colorData?.progressColors : this.colorData?.marqueeColors)?.find(c => c.themeId === themeId);
+        if (updatedEntry) {
+          this.selectedColorDetail = updatedEntry;
+        }
+      }
+    } catch (err) {
+      this.showWarningDialog("Color Update Failed", `Failed to update color:\n${err instanceof Error ? err.message : String(err)}`);
+      this.statusMessage = `Color update failed`;
     } finally {
       this.isProcessing = false;
     }

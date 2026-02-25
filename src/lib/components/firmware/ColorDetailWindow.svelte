@@ -19,9 +19,10 @@
 	interface Props {
 		detail: ColorDetail;
 		onclose: () => void;
+		onedit?: () => void;
 	}
 
-	let { detail, onclose }: Props = $props();
+	let { detail, onclose, onedit }: Props = $props();
 
 	const rgb565ToCss = (color: number): string => {
 		const r = Math.round(((color >> 11) & 0x1f) * 255 / 31);
@@ -128,6 +129,11 @@
 	});
 
 	const instructionHeaders = ['Key', 'Value'];
+
+	// Show Edit button only for Progress Bar and Marquee colors
+	const showEditButton = $derived(
+		detail.semantic.includes('Progress Bar') || detail.semantic.includes('Marquee Overlay')
+	);
 </script>
 
 <div class="color-detail-wrapper">
@@ -170,6 +176,10 @@
 
 				<!-- Buttons -->
 				<div class="button-row">
+					{#if showEditButton && onedit}
+						<Button onclick={onedit}>Edit</Button>
+					{/if}
+					<div style="flex: 1;"></div>
 					<Button onclick={onclose}>Close</Button>
 				</div>
 			</div>

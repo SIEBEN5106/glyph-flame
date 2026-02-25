@@ -72,8 +72,8 @@
 	let customColors = $state<string[]>(Array(16).fill('#FFFFFF'));
 
 	// Refs
-	let spectrumCanvas: HTMLCanvasElement;
-	let lumCanvas: HTMLCanvasElement;
+	let spectrumCanvas = $state<HTMLCanvasElement | undefined>();
+	let lumCanvas = $state<HTMLCanvasElement | undefined>();
 	let isDraggingSpectrum = $state(false);
 	let isDraggingLum = $state(false);
 
@@ -274,7 +274,8 @@
 	function updateFromRgb(field: 'r' | 'g' | 'b', value: string) {
 		let val = parseInt(value) || 0;
 		val = Math.max(0, Math.min(255, val));
-		const newRgb = { ...rgb(), [field]: val };
+		const currentRgb = rgb;
+		const newRgb = { ...currentRgb, [field]: val };
 		const newOklch = rgbToOklch(newRgb.r, newRgb.g, newRgb.b);
 		oklch = newOklch;
 	}
@@ -294,7 +295,8 @@
 	}
 
 	function handleCustomColorAdd() {
-		const colorString = `rgb(${rgb().r}, ${rgb().g}, ${rgb().b})`;
+		const currentRgb = rgb;
+		const colorString = `rgb(${currentRgb.r}, ${currentRgb.g}, ${currentRgb.b})`;
 		customColors = [colorString, ...customColors.slice(0, 15)];
 	}
 
@@ -321,7 +323,7 @@
 	}
 
 	function handleOkClick() {
-		onColorSelect?.(rgb());
+		onColorSelect?.(rgb);
 		onClose?.();
 	}
 
@@ -407,7 +409,7 @@
 						>
 							<div class="main-spectrum-wrapper">
 								<canvas
-									bindthis={spectrumCanvas}
+									bind:this={spectrumCanvas}
 									width={200}
 									height={200}
 									class="main-spectrum-canvas"
@@ -436,7 +438,7 @@
 							}}
 						>
 							<canvas
-								bindthis={lumCanvas}
+								bind:this={lumCanvas}
 								width={20}
 								height={200}
 								class="lum-canvas"
@@ -462,7 +464,7 @@
 						<div class="preview-column">
 							<div
 								class="preview-box"
-								style="background-color: rgb({rgb().r}, {rgb().g}, {rgb().b})"
+								style="background-color: rgb({rgb.r}, {rgb.g}, {rgb.b})"
 							></div>
 							<div>Solid Color</div>
 						</div>
@@ -474,7 +476,7 @@
 									id="hue-input"
 									type="text"
 									value={Math.round(oklch.h)}
-									oninput={(e) => updateFromOklch('h', e.target.value)}
+									oninput={(e) => updateFromOklch('h', e.currentTarget.value)}
 								/>
 							</div>
 							<div class="value-row">
@@ -483,7 +485,7 @@
 									id="chr-input"
 									type="text"
 									value={Math.round((oklch.c / MAX_CHROMA) * 100)}
-									oninput={(e) => updateFromOklch('c', e.target.value)}
+									oninput={(e) => updateFromOklch('c', e.currentTarget.value)}
 								/>
 							</div>
 							<div class="value-row">
@@ -492,7 +494,7 @@
 									id="lit-input"
 									type="text"
 									value={Math.round(oklch.l * 100)}
-									oninput={(e) => updateFromOklch('l', e.target.value)}
+									oninput={(e) => updateFromOklch('l', e.currentTarget.value)}
 								/>
 							</div>
 						</div>
@@ -503,8 +505,8 @@
 								<input
 									id="red-input"
 									type="text"
-									value={rgb().r}
-									oninput={(e) => updateFromRgb('r', e.target.value)}
+									value={rgb.r}
+									oninput={(e) => updateFromRgb('r', e.currentTarget.value)}
 								/>
 							</div>
 							<div class="value-row">
@@ -512,8 +514,8 @@
 								<input
 									id="green-input"
 									type="text"
-									value={rgb().g}
-									oninput={(e) => updateFromRgb('g', e.target.value)}
+									value={rgb.g}
+									oninput={(e) => updateFromRgb('g', e.currentTarget.value)}
 								/>
 							</div>
 							<div class="value-row">
@@ -521,8 +523,8 @@
 								<input
 									id="blue-input"
 									type="text"
-									value={rgb().b}
-									oninput={(e) => updateFromRgb('b', e.target.value)}
+									value={rgb.b}
+									oninput={(e) => updateFromRgb('b', e.currentTarget.value)}
 								/>
 							</div>
 						</div>

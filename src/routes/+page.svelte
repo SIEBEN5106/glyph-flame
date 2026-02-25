@@ -16,6 +16,7 @@
     FontDebugWindow,
     TofuDebugWindow,
     FontSizeConfirmationWindow,
+    ColorPicker,
   } from "$lib/components/98css";
   import { FirmwareState } from "$lib/rse/firmware-state.svelte";
 
@@ -421,7 +422,24 @@
     <ColorDetailWindow
       detail={fwState.selectedColorDetail}
       onclose={() => (fwState.showColorDetail = false)}
+      onedit={() => {
+        const detail = fwState.selectedColorDetail!;
+        if (detail.semantic.includes('Progress Bar')) {
+          fwState.openColorPicker('progress', detail.themeId ?? 0);
+        } else if (detail.semantic.includes('Marquee Overlay')) {
+          fwState.openColorPicker('marquee', detail.themeId ?? 0);
+        }
+      }}
     />
+  {/if}
+
+  {#if fwState.showColorPicker}
+    <div class="color-picker-wrapper">
+      <ColorPicker
+        onColorSelect={(rgb) => fwState.handleColorSelect(rgb)}
+        onClose={() => fwState.closeColorPicker()}
+      />
+    </div>
   {/if}
 </div>
 
@@ -643,5 +661,23 @@
     flex-direction: column;
     height: 100%;
     overflow-y: auto;
+  }
+
+  .color-picker-wrapper {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+    background-color: rgba(0, 0, 0, 0.1);
+  }
+
+  .color-picker-wrapper :global(.window) {
+    position: relative;
+    z-index: 10002;
   }
 </style>
