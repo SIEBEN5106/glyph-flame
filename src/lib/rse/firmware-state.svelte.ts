@@ -397,21 +397,102 @@ export class FirmwareState {
   }
 
   async buildImageTree(images: BitmapFileInfo[]) {
-    const imageNodes = images.map((img, idx) => {
-      return {
-        id: `image-${idx}`,
+    // Category definitions — keyed by image index extracted from filename
+    const CATEGORIES: Record<string, { group: string; label: string }> = {
+      // Light Theme
+      '0100': { group: 'light', label: 'Main Menu' },
+      '0101': { group: 'light', label: 'Main Menu' },
+      '0102': { group: 'light', label: 'Main Menu' },
+      '0103': { group: 'light', label: 'Main Menu' },
+      '0104': { group: 'light', label: 'Main Menu' },
+      '0105': { group: 'light', label: 'Main Menu' },
+      '0157': { group: 'light', label: 'List' },
+      '0156': { group: 'light', label: 'List' },
+      '0383': { group: 'light', label: 'Now Playing' },
+      // Dark Theme
+      '0463': { group: 'dark', label: 'Main Menu' },
+      '0464': { group: 'dark', label: 'Main Menu' },
+      '0465': { group: 'dark', label: 'Main Menu' },
+      '0466': { group: 'dark', label: 'Main Menu' },
+      '0467': { group: 'dark', label: 'Main Menu' },
+      '0468': { group: 'dark', label: 'Main Menu' },
+      '0519': { group: 'dark', label: 'List' },
+      '0520': { group: 'dark', label: 'List' },
+      '0746': { group: 'dark', label: 'Now Playing' },
+    };
+
+    function getImageIndex(name: string): string | null {
+      const m = name.match(/IMG_(\d{4})_/i);
+      return m ? m[1] : null;
+    }
+
+    // Bucket images
+    const buckets: Record<string, typeof images> = {
+      'light::Main Menu': [],
+      'light::List': [],
+      'light::Now Playing': [],
+      'dark::Main Menu': [],
+      'dark::List': [],
+      'dark::Now Playing': [],
+      'other': [],
+    };
+
+    images.forEach((img) => {
+      const idx = getImageIndex(img.name);
+      const cat = idx ? CATEGORIES[idx] : null;
+      if (cat) {
+        buckets[`${cat.group}::${cat.label}`].push(img);
+      } else {
+        buckets['other'].push(img);
+      }
+    });
+
+    function makeNodes(imgs: typeof images, prefix: string) {
+      return imgs.map((img, i) => ({
+        id: `image-${prefix}-${i}`,
         label: img.name,
-        type: "image" as const,
+        type: 'image' as const,
         data: img,
         children: [],
+      }));
+    }
+
+    function makeFolder(id: string, label: string, imgs: typeof images) {
+      return {
+        id,
+        label: `${label} (${imgs.length})`,
+        type: 'folder' as const,
+        children: makeNodes(imgs, id),
       };
-    });
+    }
 
     const imagesNode = {
       id: "images",
       label: "Firmware Images",
       type: "folder" as const,
-      children: imageNodes,
+      children: [
+        {
+          id: 'cat-light',
+          label: '☀️ Light Theme',
+          type: 'folder' as const,
+          children: [
+            makeFolder('light-menu',       'Main Menu',   buckets['light::Main Menu']),
+            makeFolder('light-list',       'List',        buckets['light::List']),
+            makeFolder('light-nowplaying', 'Now Playing', buckets['light::Now Playing']),
+          ],
+        },
+        {
+          id: 'cat-dark',
+          label: '🌙 Dark Theme',
+          type: 'folder' as const,
+          children: [
+            makeFolder('dark-menu',       'Main Menu',   buckets['dark::Main Menu']),
+            makeFolder('dark-list',       'List',        buckets['dark::List']),
+            makeFolder('dark-nowplaying', 'Now Playing', buckets['dark::Now Playing']),
+          ],
+        },
+        makeFolder('cat-other', 'Other', buckets['other']),
+      ],
     };
 
     if (this.treeNodes.length > 0 && this.treeNodes[0].id === "fonts") {

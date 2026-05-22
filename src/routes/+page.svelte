@@ -51,7 +51,7 @@
   // Update document title dynamically
   $effect(() => {
     if (!fwState.originalFirmwareData && !fwState.isProcessing) {
-      document.title = "FlameOcean";
+      document.title = "Ocean Flame";
     } else if (fwState.showLoadingWindow) {
       document.title = "Loading - FlameOcean";
     } else if (fwState.selectedNode?.type === "image" && fwState.imageData) {
@@ -184,6 +184,31 @@
     }
   }
 
+
+  // Export currently selected image as PNG
+  function exportCurrentImage() {
+    const img = fwState.imageData;
+    if (!img) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext("2d")!;
+    const imageData = ctx.createImageData(img.width, img.height);
+    for (let i = 0; i < img.width * img.height; i++) {
+      const o = i * 2;
+      const pixel = (img.rgb565Data[o] << 8) | img.rgb565Data[o + 1];
+      imageData.data[i*4]   = Math.round(((pixel >> 11) & 0x1f) * 255 / 31);
+      imageData.data[i*4+1] = Math.round(((pixel >> 5)  & 0x3f) * 255 / 63);
+      imageData.data[i*4+2] = Math.round((pixel         & 0x1f) * 255 / 31);
+      imageData.data[i*4+3] = 255;
+    }
+    ctx.putImageData(imageData, 0, 0);
+    const a = document.createElement("a");
+    a.href = canvas.toDataURL("image/png");
+    a.download = img.name.replace(/\.BMP$/i, ".png");
+    a.click();
+  }
+
   function triggerFileInput() { fileInput?.click(); }
   function triggerEditFileInput() { editFileInput?.click(); }
 </script>
@@ -193,7 +218,7 @@
 
   <div class="page-container">
     {#if !fwState.originalFirmwareData && !fwState.isProcessing}
-      <Window title="FlameOcean" width="500px" showClose={false}>
+      <Window title="Ocean Flame" width="500px" showClose={false}>
         <WindowBody>
           <div
             bind:this={dropZone}
@@ -225,7 +250,7 @@
 
     {#if fwState.originalFirmwareData && fwState.treeNodes.length > 0 && !showSequenceReplacer}
       <Window
-        title="Resource Browser"
+        title="Ocean Flame"
         class="browser-window"
         onclose={() => fwState.handleCloseResourceViewer()}
       >
@@ -245,6 +270,9 @@
             </button>
             <button class="toolbar-button" title="Sequence Replacer" onclick={() => (showSequenceReplacer = true)} disabled={fwState.imageList.length === 0}>
               <img src="/video.png" alt="" class="toolbar-icon-small" />
+            </button>
+            <button class="toolbar-button" title="Export Selected Image as PNG" onclick={exportCurrentImage} disabled={!fwState.imageData || fwState.selectedNode?.type !== "image"}>
+              <img src="/document-export.png" alt="" class="toolbar-icon" />
             </button>
             <input type="file" multiple hidden bind:this={editFileInput} onchange={handleEditFileSelect} />
           </div>
@@ -536,11 +564,11 @@
   }
 
   :global(.browser-window) {
-    max-width: 1024px;
-    max-height: 768px;
-    width: 100%;
-    height: auto;
-    margin: 64px;
+    max-width: 1400px;
+    max-height: calc(100vh - 40px);
+    width: calc(100vw - 48px);
+    height: calc(100vh - 40px);
+    margin: 20px 24px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
@@ -601,11 +629,11 @@
 
   .browser-layout {
     display: grid;
-    grid-template-columns: 220px 1fr;
+    grid-template-columns: 280px 1fr;
     grid-template-rows: 1fr;
     gap: 0;
     width: 100%;
-    height: 600px;
+    height: calc(100vh - 160px);
     overflow: hidden;
   }
 

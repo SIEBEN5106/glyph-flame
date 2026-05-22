@@ -277,92 +277,122 @@ export function detectOffsetMisalignment(
  * @param includeOffset - Whether to include offset in results (default: false)
  * @returns Array of bitmap file information
  */
-export function buildBitmapListFromMetadata(
-	firmwareData: Uint8Array,
-	includeOffset = false
+
+/**
+ * Build bitmap list from a simple ROCK26 index (Echo non-Mini format).
+ *
+ * Echo non-Mini stores everything directly in the ROCK26 block:
+ *   [0x00] "ROCK26IMAGERES  " (16 bytes magic)
+ *   [0x10] count              (uint32 LE)
+ *   [0x14] reserved           (12 bytes)
+ *   [0x20] entries × count, each 16 bytes:
+ *            width  (uint16 LE)
+ *            height (uint16 LE)
+ *            unk1   (uint16 LE)
+ *            unk2   (uint16 LE)
+ *            size   (uint32 LE)   — always width*height*2
+ *            offset (uint32 LE)   — relative to start of part5Data
+ */
+function buildBitmapListFromRock26Index(
+	part5Data: Uint8Array,
+	rock26Offset: number,
+	includeOffset: boolean
 ): BitmapFileInfo[] {
-	// Extract Part 5 data
-	const part5Offset = readU32LE(firmwareData, 0x14c);
-	const part5Size = readU32LE(firmwareData, 0x150);
-	const part5Data = firmwareData.slice(part5Offset, part5Offset + part5Size);
+	const count = readU32LE(part5Data, rock26Offset + 16);
+	if (count === 0 || count > 100000) return [];
 
-	// Find ROCK26 signature
-	const rock26Offset = findBytes(part5Data, ROCK26_SIGNATURE);
-	if (rock26Offset === -1) {
-		return [];
-	}
-
-	// Find metadata table using ROCK26 anchor
-	const tableStart = findMetadataTableByRock26Anchor(part5Data, rock26Offset);
-	if (tableStart === null) {
-		return [];
-	}
-
-	// Parse metadata entries
-	const metadataEntries = parseMetadataTable(part5Data, tableStart);
-
-	// Detect misalignment
-	const { misalignment } = detectOffsetMisalignment(
-		metadataEntries,
-		part5Data,
-		rock26Offset
-	);
-
+	const INDEX_START = rock26Offset + 0x20;
+	const ENTRY = 16;
 	const files: BitmapFileInfo[] = [];
-	// When misalignment = 1, Entry 0 CAN still be extracted using Entry[1]'s offset
-	const startIndex = 0;
-	const endIndex = metadataEntries.length - (misalignment > 0 ? 1 : 0);
 
-	for (let i = startIndex; i < endIndex; i++) {
-		const entry = metadataEntries[i];
+	for (let i = 0; i < count; i++) {
+		const base = INDEX_START + i * ENTRY;
+		if (base + ENTRY > part5Data.length) break;
 
-		// Adjust offset based on misalignment
-		let offset: number;
-		if (misalignment > 0) {
-			const targetIndex = i + misalignment;
-			if (targetIndex >= metadataEntries.length) continue;
-			offset = metadataEntries[targetIndex].offset;
-		} else if (misalignment < 0) {
-			const targetIndex = i + misalignment;
-			if (targetIndex < 0) continue;
-			offset = metadataEntries[targetIndex].offset;
-		} else {
-			offset = entry.offset;
-		}
+		const w      = part5Data[base]     | (part5Data[base + 1] << 8);
+		const h      = part5Data[base + 2] | (part5Data[base + 3] << 8);
+		const size   = readU32LE(part5Data, base + 8);
+		const offset = readU32LE(part5Data, base + 12);
 
-		// Get width/height from Entry[i+1] (Bootloader field reorganization)
-		let width: number;
-		let height: number;
-		if (i + 1 < metadataEntries.length) {
-			width = metadataEntries[i + 1].width;
-			height = metadataEntries[i + 1].height;
-		} else {
-			width = entry.width;
-			height = entry.height;
-		}
-
-		// Calculate size (RGB565 = 2 bytes per pixel)
-		const size = width * height * 2;
-
-		// Skip invalid entries
-		if (
-			offset === 0 ||
-			width <= 0 ||
-			height <= 0 ||
-			width > 10000 ||
-			height > 10000
-		) {
-			continue;
-		}
+		if (w === 0 || h === 0 || w > 10000 || h > 10000 || offset === 0) continue;
 
 		files.push({
-			name: entry.name,
-			width,
-			height,
+			name: `IMG_${String(i).padStart(4, '0')}_${w}x${h}.BMP`,
+			width: w,
+			height: h,
 			size,
 			...(includeOffset && { offset })
 		});
 	}
 
 	return files;
+}
+
+/**
+ * Build list of bitmap files from firmware metadata.
+ * Supports both Echo Mini (named metadata table) and Echo non-Mini (direct ROCK26 index).
+ */
+export function buildBitmapListFromMetadata(
+	firmwareData: Uint8Array,
+	includeOffset = false
+): BitmapFileInfo[] {
+	const part5Offset = readU32LE(firmwareData, 0x14c);
+	const part5Size = readU32LE(firmwareData, 0x150);
+	const part5Data = firmwareData.slice(part5Offset, part5Offset + part5Size);
+
+	const rock26Offset = findBytes(part5Data, ROCK26_SIGNATURE);
+	if (rock26Offset === -1) return [];
+
+	// --- Echo Mini path: separate named metadata table ---
+	const tableStart = findMetadataTableByRock26Anchor(part5Data, rock26Offset);
+	if (tableStart !== null) {
+		const metadataEntries = parseMetadataTable(part5Data, tableStart);
+		const { misalignment } = detectOffsetMisalignment(metadataEntries, part5Data, rock26Offset);
+
+		const files: BitmapFileInfo[] = [];
+		const endIndex = metadataEntries.length - (misalignment > 0 ? 1 : 0);
+
+		for (let i = 0; i < endIndex; i++) {
+			const entry = metadataEntries[i];
+
+			let offset: number;
+			if (misalignment > 0) {
+				const targetIndex = i + misalignment;
+				if (targetIndex >= metadataEntries.length) continue;
+				offset = metadataEntries[targetIndex].offset;
+			} else if (misalignment < 0) {
+				const targetIndex = i + misalignment;
+				if (targetIndex < 0) continue;
+				offset = metadataEntries[targetIndex].offset;
+			} else {
+				offset = entry.offset;
+			}
+
+			let width: number;
+			let height: number;
+			if (i + 1 < metadataEntries.length) {
+				width = metadataEntries[i + 1].width;
+				height = metadataEntries[i + 1].height;
+			} else {
+				width = entry.width;
+				height = entry.height;
+			}
+
+			const size = width * height * 2;
+			if (offset === 0 || width <= 0 || height <= 0 || width > 10000 || height > 10000) continue;
+
+			files.push({
+				name: entry.name,
+				width,
+				height,
+				size,
+				...(includeOffset && { offset })
+			});
+		}
+
+		return files;
+	}
+
+	// --- Echo non-Mini fallback: direct ROCK26 index ---
+	return buildBitmapListFromRock26Index(part5Data, rock26Offset, includeOffset);
 }

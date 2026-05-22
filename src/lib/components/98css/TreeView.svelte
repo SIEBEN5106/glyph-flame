@@ -27,7 +27,6 @@
 
 	const treeViewClass = $derived(clsx('tree-view', className));
 
-	// Track which nodes are being programmatically updated to avoid ontoggle loop
 	let programmaticUpdates = $state(new Set<string>());
 
 	function isSelected(nodeId: string): boolean {
@@ -43,7 +42,6 @@
 		}
 		programmaticUpdates.add(nodeId);
 		expanded = newExpanded;
-		// Remove from tracking after a brief delay to allow the toggle event to fire
 		requestAnimationFrame(() => {
 			programmaticUpdates.delete(nodeId);
 		});
@@ -55,7 +53,6 @@
 	}
 
 	function handleToggle(nodeId: string, e: Event): void {
-		// Ignore toggle events that originate from programmatic updates
 		if (programmaticUpdates.has(nodeId)) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -72,55 +69,14 @@
 	}
 </script>
 
-<ul class={treeViewClass}>
-	{#each nodes as node (node.id)}
+{#snippet renderNodes(nodeList: TreeNode[])}
+	{#each nodeList as node (node.id)}
 		<li>
 			{#if node.children && node.children.length > 0}
 				<details open={isExpanded(node.id)} ontoggle={(e) => handleToggle(node.id, e)}>
 					<summary>{node.label}</summary>
 					<ul>
-						{#each node.children as child (child.id)}
-							<li>
-								{#if child.children && child.children.length > 0}
-									<details open={isExpanded(child.id)} ontoggle={(e) => handleToggle(child.id, e)}>
-										<summary>{child.label}</summary>
-										<ul>
-											{#each child.children as grandchild (grandchild.id)}
-												<li>
-													{#if grandchild.children && grandchild.children.length > 0}
-														{grandchild.label}
-													{:else}
-														<span
-															class="leaf-node"
-															class:selected={isSelected(grandchild.id)}
-															class:replaced={replacedImages.includes(grandchild.label)}
-															onclick={() => onSelect?.(grandchild.id)}
-															onkeydown={(e) => handleLeafKeydown(grandchild.id, e)}
-															role="button"
-															tabindex="0"
-														>
-															{grandchild.label}
-														</span>
-													{/if}
-												</li>
-											{/each}
-										</ul>
-									</details>
-								{:else}
-									<span
-										class="leaf-node"
-										class:selected={isSelected(child.id)}
-										class:replaced={replacedImages.includes(child.label)}
-										onclick={() => onSelect?.(child.id)}
-										onkeydown={(e) => handleLeafKeydown(child.id, e)}
-										role="button"
-										tabindex="0"
-									>
-										{child.label}
-									</span>
-								{/if}
-							</li>
-						{/each}
+						{@render renderNodes(node.children)}
 					</ul>
 				</details>
 			{:else}
@@ -138,6 +94,10 @@
 			{/if}
 		</li>
 	{/each}
+{/snippet}
+
+<ul class={treeViewClass}>
+	{@render renderNodes(nodes)}
 	{#if children}
 		{@render children()}
 	{/if}
