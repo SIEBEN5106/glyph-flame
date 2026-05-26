@@ -91,6 +91,9 @@ export class FirmwareState {
   treeNodes = $state<TreeNode[]>([]);
 
   imageList = $state<BitmapFileInfo[]>([]);
+  firmwareType = $state<'echo' | 'mini' | 'unknown'>('unknown');
+  deviceColor = $state('black');
+  loadedFileName = $state('firmware');
   planeData = $state<{
     name: string;
     start: number;
@@ -212,6 +215,13 @@ export class FirmwareState {
         } else if (id === "listImages") {
           const images = result as BitmapFileInfo[];
           this.imageList = images;
+          // Detect firmware type from image characteristics
+          const hasBmpNames = images.length > 0 && !images[0].name.startsWith('IMG_');
+          if (hasBmpNames) {
+            this.firmwareType = 'mini';
+          } else {
+            this.firmwareType = images.some(img => img.width === 480) ? 'echo' : 'unknown';
+          }
           // buildImageTree is now async, need to handle it properly
           this.buildImageTree(images)
             .then(() => {
@@ -397,8 +407,43 @@ export class FirmwareState {
   }
 
   async buildImageTree(images: BitmapFileInfo[]) {
-    // Category definitions — keyed by image index extracted from filename
+    const fwType = this.firmwareType;
+
+    // ── Mini: flat list with real BMP names ──
+    if (fwType === 'mini') {
+      const imageNodes = images.map((img, idx) => ({
+        id: `image-${idx}`,
+        label: img.name,
+        type: 'image' as const,
+        data: img,
+        children: [],
+      }));
+      this.treeNodes = [
+        ...this.treeNodes.filter(n => n.id !== 'images'),
+        { id: 'images', label: `Firmware Images (${images.length})`, type: 'folder' as const, children: imageNodes },
+      ];
+      return;
+    }
+
+    // ── Unknown: flat list with generated names ──
+    if (fwType === 'unknown') {
+      const imageNodes = images.map((img, idx) => ({
+        id: `image-${idx}`,
+        label: img.name,
+        type: 'image' as const,
+        data: img,
+        children: [],
+      }));
+      this.treeNodes = [
+        ...this.treeNodes.filter(n => n.id !== 'images'),
+        { id: 'images', label: `Firmware Images (${images.length})`, type: 'folder' as const, children: imageNodes },
+      ];
+      return;
+    }
+
+    // ── Echo: categorized tree ──
     const CATEGORIES: Record<string, { group: string; label: string }> = {
+
       // ── Shared ──
       '0010': { group: 'shared', label: 'Boot Animation' },
       '0011': { group: 'shared', label: 'Boot Animation' },
@@ -583,7 +628,6 @@ export class FirmwareState {
       return m ? m[1] : null;
     }
 
-    // Bucket images
     // Collect all unique labels per group
     const groupLabels: Record<string, Set<string>> = { shared: new Set(), light: new Set(), dark: new Set() };
     for (const cat of Object.values(CATEGORIES)) {
@@ -1111,6 +1155,7 @@ export class FirmwareState {
     this.isProcessing = true;
     this.progress = 10;
     this.statusMessage = `Loading ${file.name}...`;
+    this.loadedFileName = file.name.replace(/\.(img|bin)$/i, '');
 
     try {
       const arrayBuffer = await file.arrayBuffer();
@@ -1465,9 +1510,7 @@ export class FirmwareState {
       // Get firmware from worker (single source of truth)
       const firmwareData = await this.getFirmwareFromWorker();
 
-      const now = new Date();
-      const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, -5);
-      const filename = `firmware_modified_${timestamp}.bin`;
+      const filename = `${this.loadedFileName}_modified.img`;
       await fileIO.writeFile(filename, firmwareData);
       this.statusMessage = `Firmware exported as ${filename}`;
     } catch (err) {
@@ -2368,5 +2411,8 @@ export class FirmwareState {
     this.replacedImages = [];
     this.replacedSmallFontCharacters = new Set();
     this.replacedLargeFontCharacters = new Set();
+    this.firmwareType = 'unknown';
+    this.deviceColor = 'black';
+    this.loadedFileName = 'firmware';
   }
 }
