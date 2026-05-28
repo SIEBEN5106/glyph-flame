@@ -359,7 +359,7 @@
           </button>
           <div class="tg-row2">
             <button class="tbtn tbtn-sm" onclick={() => (showInstallModal = true)}>
-              <i class="fa-solid fa-list-check"></i> install
+              <i class="fa-solid fa-list-check"></i> guide
             </button>
             <button class="tbtn tbtn-sm" onclick={() => (showAboutModal = true)}>
               <i class="fa-solid fa-circle-info"></i> about
