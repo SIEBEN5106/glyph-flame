@@ -439,7 +439,7 @@
             </div>
           </a>
           <a class="ab-link ab-link-kofi" href="https://ko-fi.com/U7U41U5JQ" target="_blank" rel="noopener">
-            <img src="https://storage.ko-fi.com/cdn/cup-border.png" alt="Ko-fi" class="kofi-cup" />
+            <i class="fa-solid fa-mug-hot kofi-cup"></i>
             <div>
               <div class="ab-link-title">support on ko-fi</div>
               <div class="ab-link-sub">ko-fi.com/unitreign</div>
