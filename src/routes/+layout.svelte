@@ -1,179 +1,40 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import favicon from '$lib/assets/favicon.svg';
+	import '98.css';
 	import { debugMode } from '$lib/stores';
 
 	let { children } = $props();
+	let isDebugMode = $state(false);
 
 	onMount(() => {
-		const unsub = debugMode.subscribe((v) => {
-			document.body.classList.toggle('debug-mode', v);
+		const unsubscribe = debugMode.subscribe((value) => {
+			isDebugMode = value;
+			if (value) {
+				document.body.classList.add('debug-mode');
+			} else {
+				document.body.classList.remove('debug-mode');
+			}
 		});
-		return unsub;
+
+		return () => unsubscribe();
 	});
 </script>
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
-	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" />
 </svelte:head>
 
-{@render children()}
-
 <style>
-	:global(*, *::before, *::after) { box-sizing: border-box; margin: 0; padding: 0; }
-
 	:global(html, body) {
-		height: 100vh; overflow: hidden;
-		font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
-		font-size: 13px;
-		background: var(--bg);
-		color: var(--text);
-		transition: background 0.2s, color 0.2s;
+		max-width: 100vw;
+		overflow-x: hidden;
 	}
 
-	:global(button) { font-family: inherit; font-size: 13px; }
-
-	/* ── Catppuccin Mocha (default) ── */
-	:global(:root), :global(:root.theme-mocha) {
-		--bg:        #1e1e2e;
-		--panel:     #181825;
-		--surface:   #313244;
-		--surface2:  #45475a;
-		--border:    #313244;
-		--border2:   #45475a;
-		--accent:    #cba6f7;
-		--accent2:   #d6b9fa;
-		--accent-bg: #2a1f3d;
-		--text:      #cdd6f4;
-		--text-dim:  #a6adc8;
-		--text-faint:#585b70;
-		--danger:    #f38ba8;
-		--blue:      #89b4fa;
-		--swatch-black:  #1a1a1a;
-		--swatch-blue:   #1e3a5f;
-		--swatch-green:  #1a3a1a;
-		--swatch-orange: #3a1e0a;
-		--swatch-pink:   #3a1a2a;
+	/* Debug mode titlebar gradient */
+	:global(body.debug-mode .title-bar) {
+		background: linear-gradient(90deg, #59b9b9, #b78089);
 	}
-
-	/* ── Catppuccin Frappé ── */
-	:global(:root.theme-frappe) {
-		--bg:        #303446;
-		--panel:     #292c3c;
-		--surface:   #414559;
-		--surface2:  #51576d;
-		--border:    #414559;
-		--border2:   #51576d;
-		--accent:    #ca9ee6;
-		--accent2:   #d6b4f0;
-		--accent-bg: #2a2040;
-		--text:      #c6d0f5;
-		--text-dim:  #a5adce;
-		--text-faint:#626880;
-		--danger:    #e78284;
-		--blue:      #8caaee;
-		--swatch-black:  #1a1a1a;
-		--swatch-blue:   #1e3a5f;
-		--swatch-green:  #1a3a1a;
-		--swatch-orange: #3a1e0a;
-		--swatch-pink:   #3a1a2a;
-	}
-
-	/* ── Catppuccin Macchiato ── */
-	:global(:root.theme-macchiato) {
-		--bg:        #24273a;
-		--panel:     #1e2030;
-		--surface:   #363a4f;
-		--surface2:  #494d64;
-		--border:    #363a4f;
-		--border2:   #494d64;
-		--accent:    #c6a0f6;
-		--accent2:   #d2b0f8;
-		--accent-bg: #28203a;
-		--text:      #cad3f5;
-		--text-dim:  #a5adcb;
-		--text-faint:#5b6078;
-		--danger:    #ed8796;
-		--blue:      #8aadf4;
-		--swatch-black:  #1a1a1a;
-		--swatch-blue:   #1e3a5f;
-		--swatch-green:  #1a3a1a;
-		--swatch-orange: #3a1e0a;
-		--swatch-pink:   #3a1a2a;
-	}
-
-	/* ── Catppuccin Latte (light) ── */
-	:global(:root.theme-latte) {
-		--bg:        #eff1f5;
-		--panel:     #e6e9ef;
-		--surface:   #ccd0da;
-		--surface2:  #bcc0cc;
-		--border:    #ccd0da;
-		--border2:   #acb0be;
-		--accent:    #8839ef;
-		--accent2:   #7a35d6;
-		--accent-bg: #ede0ff;
-		--text:      #4c4f69;
-		--text-dim:  #6c6f85;
-		--text-faint:#9ca0b0;
-		--danger:    #d20f39;
-		--blue:      #1e66f5;
-		--swatch-black:  #1a1a1a;
-		--swatch-blue:   #1e3a5f;
-		--swatch-green:  #1a3a1a;
-		--swatch-orange: #3a1e0a;
-		--swatch-pink:   #3a1a2a;
-	}
-
-	/* ── Dark Orange ── */
-	:global(:root.theme-dark-orange) {
-		--bg:        #18140e;
-		--panel:     #221c14;
-		--surface:   #2a2418;
-		--surface2:  #302818;
-		--border:    #3a3020;
-		--border2:   #4a4028;
-		--accent:    #d4821a;
-		--accent2:   #e89218;
-		--accent-bg: #3a2810;
-		--text:      #c4b080;
-		--text-dim:  #8a7a5a;
-		--text-faint:#4a3a22;
-		--danger:    #c04030;
-		--blue:      #4a7ab0;
-		--swatch-black:  #1a1a1a;
-		--swatch-blue:   #1e3a5f;
-		--swatch-green:  #1a3a1a;
-		--swatch-orange: #3a1e0a;
-		--swatch-pink:   #3a1a2a;
-	}
-
-	/* ── Parchment ── */
-	:global(:root.theme-parchment) {
-		--bg:        #f2ece0;
-		--panel:     #e8dfc8;
-		--surface:   #ddd3b5;
-		--surface2:  #d0c8a0;
-		--border:    #c8b888;
-		--border2:   #b8a068;
-		--accent:    #8b5a2b;
-		--accent2:   #c07830;
-		--accent-bg: #f0e0c0;
-		--text:      #2a1a08;
-		--text-dim:  #5a4030;
-		--text-faint:#9a8060;
-		--danger:    #8b1a1a;
-		--blue:      #1a5a8b;
-		--swatch-black:  #1a1a1a;
-		--swatch-blue:   #1e3a5f;
-		--swatch-green:  #1a3a1a;
-		--swatch-orange: #3a1e0a;
-		--swatch-pink:   #3a1a2a;
-	}
-
-	:global(::-webkit-scrollbar) { width: 6px; height: 6px; }
-	:global(::-webkit-scrollbar-track) { background: var(--panel); }
-	:global(::-webkit-scrollbar-thumb) { background: var(--border2); border-radius: 3px; }
-	:global(::-webkit-scrollbar-thumb:hover) { background: var(--text-dim); }
 </style>
+
+{@render children()}

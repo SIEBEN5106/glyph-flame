@@ -6,41 +6,90 @@
 
   interface Props {
     targetImages: BitmapFileInfo[];
-    onLoadImage: (image: BitmapFileInfo) => Promise<{ name: string; width: number; height: number; rgb565Data: Uint8Array } | null>;
+    onLoadImage: (image: BitmapFileInfo) => Promise<{
+      name: string;
+      width: number;
+      height: number;
+      rgb565Data: Uint8Array;
+    } | null>;
     onApply: (mappings: { target: BitmapFileInfo; source: File }[]) => void;
     onCancel: () => void;
   }
 
   let { targetImages, onLoadImage, onApply, onCancel }: Props = $props();
 
-  interface ImageGroup { prefix: string; displayName: string; images: BitmapFileInfo[]; }
+  // Group parsing state
+  interface ImageGroup {
+    prefix: string;
+    displayName: string;
+    images: BitmapFileInfo[];
+  }
 
-  let selectedGroupId = $state("");
-  let selectedImageId = $state("");
+  let selectedGroupId = $state<string>("");
+  let selectedImageId = $state<string>("");
+
+  // Source file state
   let sourceFiles = $state<File[]>([]);
-  let sourceFileMap = $state<Map<string, File>>(new Map());
-  let isFromVideo = $state(false);
+  let sourceFileMap = $state<Map<string, File>>(new Map()); // target name → source file (for images)
+  let isFromVideo = $state(false); // Track if sourceFiles came from video extraction
   let isDragOver = $state(false);
   let isExtracting = $state(false);
   let extractProgress = $state(0);
   let previewUrl = $state<string | null>(null);
   let currentSourceIndex = $state(0);
-  let targetImageData = $state<{ name: string; width: number; height: number; rgb565Data: Uint8Array } | null>(null);
+
+  // Target image data from firmware
+  let targetImageData = $state<{
+    name: string;
+    width: number;
+    height: number;
+    rgb565Data: Uint8Array;
+  } | null>(null);
   let isLoadingTarget = $state(false);
+
+  // Action to store file input reference
+  function fileInputAction(node: HTMLInputElement) {
+    fileInputRef = node;
+    return {};
+  }
+
   let fileInputRef: HTMLInputElement;
 
-  function fileInputAction(node: HTMLInputElement) { fileInputRef = node; return {}; }
-
+  // Compute groups from target images (derived, no reactivity issues)
   let groups = $derived(parseImageGroups(targetImages));
-  let groupNodes = $derived(groups.map((g) => ({ id: `group-${g.prefix}`, label: `${g.prefix} (${g.images.length})`, children: [] })));
-  let fileNodes = $derived.by(() => {
-    const g = groups.find((g) => `group-${g.prefix}` === selectedGroupId);
-    if (!g) return [];
-    return g.images.map((img, idx) => ({ id: `file-${g.prefix}-${idx}`, label: `${img.name} (${img.width}x${img.height})` }));
-  });
-  let selectedGroup = $derived(groups.find((g) => `group-${g.prefix}` === selectedGroupId));
-  let selectedImage = $derived(selectedGroup?.images.find((_, idx) => `file-${selectedGroup.prefix}-${idx}` === selectedImageId) ?? null);
 
+  // Convert groups to tree nodes for TreeView
+  let groupNodes = $derived(
+    groups.map((group) => ({
+      id: `group-${group.prefix}`,
+      label: `${group.prefix} (${group.images.length})`,
+      children: [],
+    })),
+  );
+
+  // Convert files in selected group to tree nodes
+  let fileNodes = $derived.by(() => {
+    const selectedGroup = groups.find(
+      (g) => `group-${g.prefix}` === selectedGroupId,
+    );
+    if (!selectedGroup) return [];
+    return selectedGroup.images.map((img, idx) => ({
+      id: `file-${selectedGroup.prefix}-${idx}`,
+      label: `${img.name} (${img.width}x${img.height})`,
+    }));
+  });
+
+  // Get selected group and image
+  let selectedGroup = $derived(
+    groups.find((g) => `group-${g.prefix}` === selectedGroupId),
+  );
+  let selectedImage = $derived(
+    selectedGroup?.images.find(
+      (_, idx) => `file-${selectedGroup.prefix}-${idx}` === selectedImageId,
+    ) ?? null,
+  );
+
+  // Initialize selected group when groups change
   $effect(() => {
     if (groups.length > 0 && !selectedGroupId) {
       selectedGroupId = `group-${groups[0].prefix}`;
@@ -48,88 +97,180 @@
     }
   });
 
+  // Parse images into groups based on filename patterns
   function parseImageGroups(images: BitmapFileInfo[]): ImageGroup[] {
-    const map = new Map<string, BitmapFileInfo[]>();
+    const groupMap = new Map<string, BitmapFileInfo[]>();
+
     for (const img of images) {
-      const key = extractGroupKey(img.name);
-      if (!key.prefix) continue;
-      if (!map.has(key.prefix)) map.set(key.prefix, []);
-      map.get(key.prefix)!.push(img);
+      const groupKey = extractGroupKey(img.name);
+      // Skip images that don't match any pattern
+      if (!groupKey.prefix) continue;
+
+      if (!groupMap.has(groupKey.prefix)) {
+        groupMap.set(groupKey.prefix, []);
+      }
+      groupMap.get(groupKey.prefix)!.push(img);
     }
-    return Array.from(map.entries())
+
+    // Convert to array, validate dimensions, filter single-file groups, and sort
+    return Array.from(groupMap.entries())
       .filter(([_, imgs]) => {
+        // Must have multiple files
         if (imgs.length <= 1) return false;
-        const d = `${imgs[0].width}x${imgs[0].height}`;
-        return imgs.every((i) => `${i.width}x${i.height}` === d);
+
+        // All images in the group must have consistent dimensions
+        const firstDim = `${imgs[0].width}x${imgs[0].height}`;
+        return imgs.every((img) => `${img.width}x${img.height}` === firstDim);
       })
       .map(([prefix, imgs]) => ({
         prefix,
         displayName: `${prefix} (${imgs[0].width}x${imgs[0].height})`,
-        images: imgs.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+        images: imgs.sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { numeric: true }),
+        ),
       }))
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
   }
 
-  function extractGroupKey(filename: string): { prefix: string; number: string } {
-    const m1 = filename.match(/^(.+?)(\d+)_\((\d+),(\d+)\)\./);
-    if (m1) return { prefix: m1[1], number: m1[2] };
-    const m2 = filename.match(/^(.+?)[_-](\d+)[_-](\d+)[_.]/);
-    if (m2) return { prefix: m2[1], number: m2[2] };
-    const m3 = filename.match(/^(.+?)[_-](\d+)[_.]/);
-    if (m3) { const p = m3[1]; return { prefix: p.endsWith('_') || p.endsWith('-') ? p : p + '_', number: m3[2] }; }
-    return { prefix: '', number: '' };
+  // Extract group prefix from filename (e.g., "Z_POWERON0_(0,0).BMP" -> "Z_POWERON")
+  function extractGroupKey(filename: string): {
+    prefix: string;
+    number: string;
+  } {
+    // Pattern 1: Z_POWERON0_(0,0).BMP -> prefix: Z_POWERON (note the underscore before (x,y))
+    const match1 = filename.match(/^(.+?)(\d+)_\((\d+),(\d+)\)\./);
+    if (match1) {
+      return { prefix: match1[1], number: match1[2] };
+    }
+
+    // Pattern 2: Z_POWERON_0_0.BMP -> prefix: Z_POWERON_
+    const match2 = filename.match(/^(.+?)[_-](\d+)[_-](\d+)[_.]/);
+    if (match2) {
+      return { prefix: match2[1], number: match2[2] };
+    }
+
+    // Pattern 3: FRAME_0001.BMP -> prefix: FRAME_
+    const match3 = filename.match(/^(.+?)[_-](\d+)[_.]/);
+    if (match3) {
+      const prefix = match3[1];
+      // Add separator if not already present
+      const finalPrefix =
+        prefix.endsWith("_") || prefix.endsWith("-") ? prefix : prefix + "_";
+      return { prefix: finalPrefix, number: match3[2] };
+    }
+
+    // No pattern found - return empty prefix to filter out this image
+    return { prefix: "", number: "" };
   }
 
+  // Handle group selection from TreeView
   async function handleGroupSelect(nodeId: string) {
     selectedGroupId = nodeId;
-    const g = groups.find((g) => `group-${g.prefix}` === nodeId);
-    if (g && g.images.length > 0) {
-      selectedImageId = `file-${g.prefix}-0`;
+    const group = groups.find((g) => `group-${g.prefix}` === nodeId);
+    if (group && group.images.length > 0) {
+      selectedImageId = `file-${group.prefix}-0`;
       currentSourceIndex = 0;
+
+      // Clear previous data to show loading state
       targetImageData = null;
-      await loadTargetImage(g.images[0]);
+
+      // Load target image from firmware
+      await loadTargetImage(group.images[0]);
+
+      // Clear sources when switching groups (mappings would be invalid)
       clearSources();
     }
-    cleanupPreview(); updatePreview();
+    cleanupPreview();
+    updatePreview();
   }
 
+  // Handle image selection from TreeView
   async function handleImageSelect(nodeId: string) {
     selectedImageId = nodeId;
     const match = nodeId.match(/file-(.+)-(\d+)/);
     if (match) {
-      const g = groups.find((g) => g.prefix === match[1]);
-      if (g) currentSourceIndex = parseInt(match[2], 10);
+      const group = groups.find((g) => g.prefix === match[1]);
+      if (group) {
+        const idx = parseInt(match[2], 10);
+        currentSourceIndex = idx;
+      }
     }
+
+    // Clear previous data to show loading state
     targetImageData = null;
-    if (selectedImage) await loadTargetImage(selectedImage);
+
+    // Load target image from firmware
+    if (selectedImage) {
+      await loadTargetImage(selectedImage);
+    }
+
     updatePreview();
   }
 
+  // Load target image data from firmware
   async function loadTargetImage(image: BitmapFileInfo) {
     isLoadingTarget = true;
-    try { targetImageData = await onLoadImage(image); }
-    catch (e) { console.error(e); targetImageData = null; }
-    finally { isLoadingTarget = false; }
+    try {
+      const data = await onLoadImage(image);
+      targetImageData = data;
+    } catch (e) {
+      console.error("Failed to load target image:", e);
+      targetImageData = null;
+    } finally {
+      isLoadingTarget = false;
+    }
   }
 
   async function handleFilesDrop(files: File[]) {
-    if (!files.length) return;
-    const video = files.find((f) => f.type.startsWith('video/'));
-    if (video) {
-      isExtracting = true; extractProgress = 0; isFromVideo = true; sourceFileMap.clear();
+    if (files.length === 0) return;
+
+    const videoFile = files.find((f) => f.type.startsWith("video/"));
+
+    if (videoFile) {
+      // VIDEO: Extract frames and use index-based matching
+      isExtracting = true;
+      extractProgress = 0;
+      isFromVideo = true;
+      sourceFileMap.clear();
       try {
-        sourceFiles = await extractFrames(video, selectedGroup?.images.length || 30, (p) => { extractProgress = p; });
-      } catch (e) { alert('Failed to extract frames: ' + (e instanceof Error ? e.message : String(e))); }
-      finally { isExtracting = false; }
+        const frames = await extractFrames(
+          videoFile,
+          selectedGroup?.images.length || 30,
+          (progress) => {
+            extractProgress = progress;
+          },
+        );
+        sourceFiles = frames;
+      } catch (e) {
+        console.error("Failed to extract frames", e);
+        alert(
+          "Failed to extract frames from video: " +
+            (e instanceof Error ? e.message : String(e)),
+        );
+      } finally {
+        isExtracting = false;
+      }
     } else {
-      isFromVideo = false; sourceFiles = []; sourceFileMap.clear();
+      // IMAGES: Match by exact filename (with flexible extension)
+      isFromVideo = false;
+      sourceFiles = []; // Clear array-based source
+      sourceFileMap.clear();
+
       if (selectedGroup) {
-        const dropped = new Map<string, File>();
-        for (const f of files) dropped.set(f.name.replace(/\.[^.]+$/, ''), f);
-        for (const t of selectedGroup.images) {
-          const base = t.name.replace(/\.[^.]+$/, '');
-          const match = dropped.get(base);
-          if (match) sourceFileMap.set(t.name, match);
+        // Create a map of dropped files by base filename (without extension)
+        const droppedFileMap = new Map<string, File>();
+        for (const file of files) {
+          const baseName = file.name.replace(/\.[^.]+$/, ''); // Remove extension
+          droppedFileMap.set(baseName, file);
+        }
+
+        // Match target images with dropped files by exact filename
+        for (const targetImg of selectedGroup.images) {
+          const targetBaseName = targetImg.name.replace(/\.[^.]+$/, '');
+          const matchedFile = droppedFileMap.get(targetBaseName);
+          if (matchedFile) {
+            sourceFileMap.set(targetImg.name, matchedFile);
+          }
         }
       }
     }
@@ -138,221 +279,563 @@
 
   function handleFileSelect(e: Event) {
     const input = e.target as HTMLInputElement;
-    if (input.files) handleFilesDrop(Array.from(input.files));
-    input.value = '';
+    if (input.files) {
+      const files = Array.from(input.files);
+      handleFilesDrop(files);
+    }
+    // Reset input so the same files can be selected again
+    input.value = "";
+  }
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    isDragOver = true;
+  }
+
+  function handleDragLeave(e: DragEvent) {
+    e.preventDefault();
+    isDragOver = false;
+  }
+
+  function handleDrop(e: DragEvent) {
+    e.preventDefault();
+    isDragOver = false;
+    if (e.dataTransfer?.files) {
+      const files = Array.from(e.dataTransfer.files);
+      handleFilesDrop(files);
+    }
+  }
+
+  function triggerFileInput() {
+    fileInputRef?.click();
   }
 
   function updatePreview() {
     cleanupPreview();
-    const f = isFromVideo ? sourceFiles[currentSourceIndex] : (selectedImage ? sourceFileMap.get(selectedImage.name) : undefined);
-    if (f) previewUrl = URL.createObjectURL(f);
+    let sourceFile: File | undefined;
+
+    if (isFromVideo) {
+      // Video mode: Use index-based array
+      sourceFile = sourceFiles[currentSourceIndex];
+    } else {
+      // Image mode: Look up by target image name
+      if (selectedImage) {
+        sourceFile = sourceFileMap.get(selectedImage.name);
+      }
+    }
+
+    if (sourceFile) {
+      previewUrl = URL.createObjectURL(sourceFile);
+    }
   }
-  function cleanupPreview() { if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; } }
-  function clearSources() { sourceFiles = []; sourceFileMap.clear(); isFromVideo = false; }
+
+  function cleanupPreview() {
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+    }
+  }
+
+  function clearSources() {
+    sourceFiles = [];
+    sourceFileMap.clear();
+    isFromVideo = false;
+  }
 
   function apply() {
     if (!selectedGroup) return;
+
     const mappings: { target: BitmapFileInfo; source: File }[] = [];
+
     if (isFromVideo) {
-      if (!sourceFiles.length) return;
-      for (let i = 0; i < selectedGroup.images.length && i < sourceFiles.length; i++)
-        mappings.push({ target: selectedGroup.images[i], source: sourceFiles[i] });
+      // Video mode: Index-based matching for extracted frames
+      if (sourceFiles.length === 0) return;
+
+      for (
+        let i = 0;
+        i < selectedGroup.images.length && i < sourceFiles.length;
+        i++
+      ) {
+        mappings.push({
+          target: selectedGroup.images[i],
+          source: sourceFiles[i],
+        });
+      }
     } else {
-      if (!sourceFileMap.size) return;
-      for (const t of selectedGroup.images) {
-        const s = sourceFileMap.get(t.name);
-        if (s) mappings.push({ target: t, source: s });
+      // Image mode: Filename-based matching only
+      if (sourceFileMap.size === 0) return;
+
+      for (const targetImg of selectedGroup.images) {
+        const sourceFile = sourceFileMap.get(targetImg.name);
+        if (sourceFile) {
+          mappings.push({
+            target: targetImg,
+            source: sourceFile,
+          });
+        }
       }
     }
-    if (mappings.length > 0) { onApply(mappings); cleanupPreview(); }
+
+    if (mappings.length > 0) {
+      onApply(mappings);
+      cleanupPreview();
+    }
   }
 
-  const canApply = $derived(
-    !!selectedGroup && (isFromVideo ? sourceFiles.length > 0 : sourceFileMap.size > 0)
-  );
-  const applyCount = $derived(
-    isFromVideo
-      ? Math.min(sourceFiles.length, selectedGroup?.images.length || 0)
-      : sourceFileMap.size
-  );
-
-  $effect(() => () => cleanupPreview());
+  // Cleanup on unmount
+  $effect(() => {
+    return () => cleanupPreview();
+  });
 </script>
 
-<div class="sr">
-  <div class="sr-desc">Select an image group, then drop replacement files (matching names) or a video to extract frames from.</div>
+<div class="sequence-replacer">
+  <div class="header">
+    <h3>Replace Image Sequence</h3>
+    <p>Select a group, then load replacement files with matching filenames (or drop a video)</p>
+  </div>
 
-  <div class="sr-content">
-    <!-- Groups -->
-    <div class="sr-col">
-      <div class="sr-col-head">Groups <span class="cnt">({groups.length})</span></div>
-      <div class="sr-col-body">
-        <TreeView nodes={groupNodes} selected={selectedGroupId} onSelect={handleGroupSelect} />
-      </div>
+  <div class="content">
+    <!-- Column 1: Groups -->
+    <div class="column groups">
+      <h4>Groups ({groups.length})</h4>
+      <TreeView
+        nodes={groupNodes}
+        selected={selectedGroupId}
+        onSelect={handleGroupSelect}
+      />
     </div>
 
-    <!-- Files in group -->
-    <div class="sr-col">
-      <div class="sr-col-head">
-        {selectedGroup?.displayName || 'Files'}
-        <span class="cnt">({selectedGroup?.images.length || 0})</span>
-      </div>
-      <div class="sr-col-body">
-        {#if selectedGroup}
-          <TreeView nodes={fileNodes} selected={selectedImageId} onSelect={handleImageSelect} />
-        {:else}
-          <div class="empty">Select a group</div>
-        {/if}
-      </div>
+    <!-- Column 2: Files in selected group -->
+    <div class="column files">
+      <h4>
+        {selectedGroup?.displayName || "Files"}
+        ({selectedGroup?.images.length || 0})
+      </h4>
+      {#if selectedGroup}
+        <TreeView
+          nodes={fileNodes}
+          selected={selectedImageId}
+          onSelect={handleImageSelect}
+        />
+      {:else}
+        <div class="empty-msg">Select a group to view files</div>
+      {/if}
     </div>
 
-    <!-- Preview + drop -->
-    <div class="sr-col sr-col-right">
-      <!-- Before/After -->
-      <div class="sr-col-head">
-        {selectedImage?.name ?? 'Preview'}
-        {#if selectedImage}<span class="cnt">{selectedImage.width}×{selectedImage.height}</span>{/if}
-      </div>
-      <div class="preview-area">
-        {#if selectedImage}
-          <div class="preview-pair">
-            <div class="preview-half">
-              <div class="preview-label">Before</div>
-              {#if isLoadingTarget}
-                <div class="preview-loading">Loading…</div>
-              {:else if targetImageData}
-                <ImageRenderer name={targetImageData.name} width={targetImageData.width}
-                  height={targetImageData.height} rgb565Data={targetImageData.rgb565Data} zoom={2} />
-              {:else}
-                <div class="preview-empty">No data</div>
-              {/if}
+    <!-- Column 3: Replacement preview and actions -->
+    <div
+      class="column replace"
+      role="region"
+      aria-label="Replacement preview and file drop zone"
+    >
+      <!-- Preview section -->
+      <div class="preview-section">
+        <div class="preview-header">
+          <h4>{selectedImage?.name ?? "Replace"}</h4>
+          {#if selectedImage}
+            <span class="header-dim"
+              >{selectedImage.width}x{selectedImage.height}</span
+            >
+          {/if}
+        </div>
+
+        <div class="preview-area">
+          {#if !selectedImage}
+            <div class="empty-msg">Select an image to replace</div>
+          {:else}
+            <div class="preview-image">
+              <div class="preview-column before-column">
+                <div class="preview-label">Before</div>
+                {#if !targetImageData}
+                  <div class="canvas-wrapper">
+                    <div class="canvas-placeholder">
+                      <canvas
+                        width={selectedImage.width * 2}
+                        height={selectedImage.height * 2}
+                      ></canvas>
+                      {#if isLoadingTarget}
+                        <span class="loading-text">Loading...</span>
+                      {/if}
+                    </div>
+                    <div class="image-info">{selectedImage.name} - {selectedImage.width}x{selectedImage.height}</div>
+                  </div>
+                {:else}
+                  <ImageRenderer
+                    name={targetImageData.name}
+                    width={targetImageData.width}
+                    height={targetImageData.height}
+                    rgb565Data={targetImageData.rgb565Data}
+                    zoom={2}
+                  />
+                {/if}
+              </div>
+              <div class="preview-column after-column">
+                <div class="preview-label">After</div>
+                {#if ((isFromVideo && sourceFiles.length > 0) || (!isFromVideo && sourceFileMap.get(selectedImage?.name || ""))) && previewUrl}
+                  <img src={previewUrl} alt="Preview" />
+                {:else}
+                  <div class="preview-placeholder">Drop replacement images</div>
+                {/if}
+              </div>
             </div>
-            <div class="preview-half">
-              <div class="preview-label">After</div>
-              {#if previewUrl}
-                <img class="preview-img" src={previewUrl} alt="Preview" />
-              {:else}
-                <div class="preview-empty">Drop files below</div>
-              {/if}
-            </div>
-          </div>
-        {:else}
-          <div class="empty">Select an image</div>
-        {/if}
+
+          {/if}
+        </div>
       </div>
 
-      <!-- Drop zone -->
-      <div class="dropzone-wrap">
+      <!-- Drop zone section -->
+      <div class="drop-section">
+        <div class="drop-header">
+          <h4>Replacement Files</h4>
+        </div>
+
         <div
-          class="dropzone"
-          class:over={isDragOver}
-          ondragover={(e) => { e.preventDefault(); isDragOver = true; }}
-          ondragleave={() => (isDragOver = false)}
-          ondrop={(e) => { e.preventDefault(); isDragOver = false; if (e.dataTransfer?.files) handleFilesDrop(Array.from(e.dataTransfer.files)); }}
-          onclick={() => fileInputRef?.click()}
-          onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && fileInputRef?.click()}
-          role="button" tabindex="0"
+          class="drop-zone"
+          class:drag-over={isDragOver}
+          ondragover={handleDragOver}
+          ondragleave={handleDragLeave}
+          ondrop={handleDrop}
+          onclick={triggerFileInput}
+          onkeydown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              triggerFileInput();
+            }
+          }}
+          role="button"
+          tabindex="0"
         >
-          <input type="file" use:fileInputAction accept="image/*,video/*" multiple hidden onchange={handleFileSelect} />
-          <span class="dz-icon">📁</span>
-          <span class="dz-text">Drop images (matching names) or video</span>
+          <input
+            type="file"
+            use:fileInputAction
+            accept="image/*,video/*"
+            multiple
+            hidden
+            onchange={handleFileSelect}
+          />
+          <div class="drop-zone-content">
+            <img
+              src={isDragOver ? "/folder-drag-accept.png" : "/folder.png"}
+              alt="Folder"
+              class="folder-icon"
+            />
+            <div class="drop-text">Drop images (same name) or video here</div>
+          </div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Footer -->
-  <div class="sr-footer">
-    <button class="fbtn fbtn-accent" onclick={apply} disabled={!canApply}>
-      Apply ({applyCount} image{applyCount !== 1 ? 's' : ''})
-    </button>
+  <div class="footer">
+    <div class="buttons">
+      <button onclick={onCancel}>Cancel</button>
+      <button
+        onclick={apply}
+        disabled={!selectedGroup || ((isFromVideo && sourceFiles.length === 0) || (!isFromVideo && sourceFileMap.size === 0))}
+        class="primary"
+      >
+        Apply ({isFromVideo ? Math.min(sourceFiles.length, selectedGroup?.images.length || 0) : sourceFileMap.size} images)
+      </button>
+    </div>
   </div>
 </div>
 
 {#if isExtracting}
-  <LoadingWindow message="Extracting frames from video..." progress={extractProgress} showProgress={true} />
+  <LoadingWindow message="Extracting frames from video..." progress={extractProgress} showProgress={true} showClose={false} />
 {/if}
 
 <style>
-  .sr {
-    display: flex; flex-direction: column; height: 100%;
-    background: var(--panel); padding: 16px; gap: 12px;
-  }
-  .sr-desc { font-size: 12px; color: var(--text-dim); flex-shrink: 0; }
-
-  .sr-content {
-    flex: 1; display: grid; grid-template-columns: 200px 200px 1fr;
-    gap: 12px; min-height: 0; overflow: hidden;
+  .sequence-replacer {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 8px;
+    box-sizing: border-box;
+    background-color: #c0c0c0;
   }
 
-  .sr-col {
-    display: flex; flex-direction: column;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 6px; overflow: hidden; min-height: 0;
+  .header h3 {
+    margin: 0;
+    font-size: 16px;
   }
-  .sr-col-right { border: none; background: transparent; gap: 8px; }
-
-  .sr-col-head {
-    padding: 8px 12px; background: var(--surface2);
-    border-bottom: 1px solid var(--border);
-    font-size: 11px; font-weight: 600; color: var(--text-dim);
-    text-transform: uppercase; letter-spacing: 0.06em;
-    flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+  .header p {
+    margin: 4px 0 8px;
+    font-size: 12px;
   }
-  .cnt { color: var(--text-faint); font-weight: 400; }
 
-  .sr-col-body { flex: 1; overflow-y: auto; min-height: 0; padding: 4px; }
-  .sr-col-body :global(.tree-view) { font-size: 12px; }
-  .sr-col-body :global(li) { list-style: none; }
-  .sr-col-body :global(.leaf-node) {
-    display: block; padding: 3px 8px; border-radius: 3px;
-    cursor: pointer; color: var(--text-dim); font-size: 12px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    transition: background 0.1s;
+  .content {
+    display: flex;
+    flex: 1;
+    gap: 8px;
+    overflow: hidden;
+    margin-bottom: 8px;
   }
-  .sr-col-body :global(.leaf-node:hover) { background: var(--panel); color: var(--text); }
-  .sr-col-body :global(.leaf-node.selected) { background: var(--accent-bg); color: var(--text); border-left: 2px solid var(--accent); padding-left: 6px; }
 
-  .empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-faint); font-size: 12px; }
+  .column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background-color: #ffffff;
+    border: 2px inset #ffffff;
+    border-right-color: #dfdfdf;
+    border-bottom-color: #dfdfdf;
+    min-width: 0;
+  }
 
-  /* Preview */
+  .column h4 {
+    margin: 0;
+    padding: 4px;
+    background-color: #000080;
+    color: white;
+    font-size: 12px;
+  }
+
+  .column :global(.tree-view) {
+    flex: 1;
+  }
+
+  .column.replace {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: transparent;
+    border: 0;
+  }
+
+  .preview-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  .preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: #000080;
+    padding: 4px 8px;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+
+  .preview-header h4 {
+    margin: 0;
+    padding: 0;
+    background-color: transparent;
+    color: white;
+    font-size: 12px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .header-dim {
+    color: #cccccc;
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+
   .preview-area {
-    flex: 1; background: var(--surface); border: 1px solid var(--border);
-    border-radius: 6px; overflow: hidden; min-height: 0; display: flex; flex-direction: column;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
   }
-  .preview-pair { display: flex; flex: 1; min-height: 0; }
-  .preview-half {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: flex-start; padding: 10px; gap: 8px;
-    border-right: 1px solid var(--border);
-    overflow: auto;
-  }
-  .preview-half:last-child { border-right: none; }
-  .preview-label { font-size: 10px; font-weight: 700; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
-  .preview-loading, .preview-empty { font-size: 11px; color: var(--text-faint); margin-top: 20px; }
-  .preview-img { max-width: 100%; max-height: 200px; image-rendering: pixelated; object-fit: contain; border-radius: 3px; border: 1px solid var(--border2); }
-  .preview-half :global(.image-container) { background: transparent; border: none; padding: 0; }
-  .preview-half :global(canvas) { max-width: 100%; height: auto; }
 
-  /* Drop zone */
-  .dropzone-wrap { flex-shrink: 0; }
-  .dropzone {
-    background: var(--surface); border: 1px dashed var(--border2); border-radius: 6px;
-    padding: 16px; display: flex; align-items: center; justify-content: center;
-    gap: 10px; cursor: pointer; transition: all 0.1s; outline: none;
+  .drop-section {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-top: 2px solid #808080;
   }
-  .dropzone:hover, .dropzone.over { border-color: var(--accent); background: var(--accent-bg); }
-  .dz-icon { font-size: 20px; }
-  .dz-text { font-size: 12px; color: var(--text-dim); }
 
-  /* Footer */
-  .sr-footer { display: flex; justify-content: flex-end; flex-shrink: 0; }
-  .fbtn {
-    padding: 9px 20px; border-radius: 5px; font-size: 13px; cursor: pointer;
-    border: 1px solid var(--border2); background: var(--surface); color: var(--text);
-    transition: all 0.1s;
+  .drop-header {
+    background-color: #000080;
+    padding: 4px 8px;
+    flex-shrink: 0;
   }
-  .fbtn:disabled { opacity: 0.3; cursor: not-allowed; }
-  .fbtn-accent { background: var(--accent-bg); border-color: var(--accent); font-weight: 600; }
-  .fbtn-accent:hover:not(:disabled) { border-color: var(--accent2); }
+
+  .drop-header h4 {
+    margin: 0;
+    padding: 0;
+    background-color: transparent;
+    color: white;
+    font-size: 12px;
+  }
+
+  .empty-msg {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #666;
+    border: 2px dashed #999;
+    margin: 4px;
+    text-align: center;
+  }
+
+  .drop-zone {
+    padding: 16px;
+    box-shadow:
+      inset -1px -1px #fff,
+      inset 1px 1px grey,
+      inset -2px -2px #dfdfdf,
+      inset 2px 2px #0a0a0a;
+    background-color: #ffffff;
+    text-align: center;
+    cursor: pointer;
+    min-height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .drop-zone:hover {
+    background-color: #eeeeee;
+  }
+
+  .drop-zone.drag-over {
+    border: 2px inset #000080;
+    background-color: #e0e0ff;
+  }
+
+  .drop-zone-content {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    justify-content: center;
+  }
+
+  .folder-icon {
+    width: 32px;
+    height: 32px;
+    image-rendering: pixelated;
+  }
+
+  .drop-text {
+    font-size: 12px;
+    color: #000000;
+  }
+
+
+
+  .preview-image {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 200px;
+    background-color: #e0e0e0;
+    padding: 8px;
+    box-shadow:
+      inset -1px -1px #fff,
+      inset 1px 1px grey,
+      inset -2px -2px #dfdfdf,
+      inset 2px 2px #0a0a0a;
+  }
+
+  .preview-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background-color: #ffffff;
+    border: 2px inset #ffffff;
+    padding: 8px;
+    min-height: 150px;
+  }
+
+  .preview-label {
+    font-size: 10px;
+    font-weight: bold;
+    color: #000080;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+  }
+
+  .preview-placeholder {
+    color: #666;
+    font-size: 11px;
+    text-align: center;
+  }
+
+  .canvas-placeholder {
+    position: relative;
+    display: inline-block;
+  }
+
+  .canvas-placeholder canvas {
+    display: block;
+    background-color: #000000;
+    border: 2px solid #808080;
+    image-rendering: pixelated;
+    max-width: 100%;
+    height: auto;
+  }
+
+  .canvas-placeholder .loading-text {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #ffffff;
+    font-size: 12px;
+    pointer-events: none;
+  }
+
+  .canvas-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .canvas-wrapper .image-info {
+    margin-top: 8px;
+    font-size: 12px;
+    color: #000000;
+    text-align: center;
+  }
+
+  .preview-column :global(.image-container) {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+  }
+
+  .preview-column img {
+    max-width: 100%;
+    max-height: 200px;
+    image-rendering: pixelated;
+    object-fit: contain;
+  }
+
+  .footer {
+    flex-shrink: 0;
+  }
+
+  .buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  button {
+    min-width: 70px;
+    height: 24px;
+  }
+
+  button.primary {
+    font-weight: bold;
+  }
+
+  button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
 </style>
