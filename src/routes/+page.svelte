@@ -438,6 +438,13 @@
               <div class="ab-link-sub">youtube.com/watch?v=p8HDWJaDaP4</div>
             </div>
           </a>
+          <a class="ab-link ab-link-kofi" href="https://ko-fi.com/U7U41U5JQ" target="_blank" rel="noopener">
+            <img src="https://storage.ko-fi.com/cdn/cup-border.png" alt="Ko-fi" class="kofi-cup" />
+            <div>
+              <div class="ab-link-title">support on ko-fi</div>
+              <div class="ab-link-sub">ko-fi.com/unitreign</div>
+            </div>
+          </a>
         </div>
       </div>
       <div class="modal-foot">
@@ -756,7 +763,21 @@
   }
   .ab-link:last-child { border-bottom: none; }
   .ab-link:hover { color: var(--accent); }
-  .ab-link i { width: 16px; text-align: center; flex-shrink: 0; font-size: 14px; }
+  .ab-link-kofi { border-color: var(--accent); opacity: 0.8; }
+  .ab-link-kofi:hover { opacity: 1; border-color: var(--accent2); }
+  .kofi-cup {
+    width: 22px; height: 15px; flex-shrink: 0;
+    animation: kofi-wiggle 3s infinite;
+  }
+  @keyframes kofi-wiggle {
+    0%,60%,100% { transform: rotate(0) scale(1); }
+    75%          { transform: rotate(0) scale(1.12); }
+    80%          { transform: rotate(0) scale(1.1); }
+    84%          { transform: rotate(-10deg) scale(1.1); }
+    88%          { transform: rotate(10deg) scale(1.1); }
+    92%          { transform: rotate(-10deg) scale(1.1); }
+    96%          { transform: rotate(10deg) scale(1.1); }
+  }
   .ab-link-title { font-size: 12px; color: var(--text); margin-bottom: 2px; }
   .ab-link:hover .ab-link-title { color: var(--accent); }
   .ab-link-sub { font-size: 10px; color: var(--text-faint); }
