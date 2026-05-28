@@ -180,7 +180,7 @@
     onkeydown={(e) => (e.key === "Enter" || e.key === " ") && fileInput?.click()}
     role="button" tabindex="0">
     <div class="drop-card">
-      <div class="drop-logo">ocean flame<span class="drop-dot">.</span></div>
+      <div class="drop-logo">oflame<span class="drop-dot">.</span>reign</div>
       <p class="drop-sub">firmware image editor for snowsky echo &amp; echo mini</p>
       <div class="drop-divider"></div>
       <div class="drop-hint">drop <code>.img</code> firmware here or click to browse</div>
