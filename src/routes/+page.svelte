@@ -194,7 +194,7 @@
     <header class="header">
       <div class="hd-left">
         <button class="hd-brand" onclick={cycleTheme} title="cycle theme → {currentTheme.label}">
-          ocean flame<span class="hd-dot">.</span>
+          oflame<span class="hd-dot">.</span>reign
         </button>
         <span class="hd-sep">/</span>
         <span class="hd-file">{fwState.loadedFileName}</span>
