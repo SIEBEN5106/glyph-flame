@@ -3,6 +3,7 @@
   import DeviceMockup from "$lib/components/firmware/DeviceMockup.svelte";
   import FontGridRenderer from "$lib/components/firmware/FontGridRenderer.svelte";
   import SequenceReplacerWindow from "$lib/components/firmware/SequenceReplacerWindow.svelte";
+  import BootAnimationWindow from "$lib/components/firmware/BootAnimationWindow.svelte";
   import ColorTable from "$lib/components/firmware/ColorTable.svelte";
   import ColorDetailWindow from "$lib/components/firmware/ColorDetailWindow.svelte";
   import { initDebugShortcut } from "$lib/stores";
@@ -27,6 +28,7 @@
   let isImageDragOver = $state(false);
   let searchQuery = $state('');
   let showInstallModal = $state(false);
+  let showBootAnimModal = $state(false);
   let showAboutModal = $state(false);
 
   const THEMES = [
@@ -178,7 +180,7 @@
     onkeydown={(e) => (e.key === "Enter" || e.key === " ") && fileInput?.click()}
     role="button" tabindex="0">
     <div class="drop-card">
-      <div class="drop-logo">oflame<span class="drop-dot">.</span>reign</div>
+      <div class="drop-logo">ocean flame<span class="drop-dot">.</span></div>
       <p class="drop-sub">firmware image editor for snowsky echo &amp; echo mini</p>
       <div class="drop-divider"></div>
       <div class="drop-hint">drop <code>.img</code> firmware here or click to browse</div>
@@ -194,7 +196,7 @@
     <header class="header">
       <div class="hd-left">
         <button class="hd-brand" onclick={cycleTheme} title="cycle theme → {currentTheme.label}">
-          oflame<span class="hd-dot">.</span>reign
+          ocean flame<span class="hd-dot">.</span>
         </button>
         <span class="hd-sep">/</span>
         <span class="hd-file">{fwState.loadedFileName}</span>
@@ -346,6 +348,9 @@
           <button class="tbtn" onclick={() => (showSequenceReplacer = true)} disabled={fwState.imageList.length === 0}>
             <i class="fa-solid fa-arrows-rotate"></i> sequence replacer
           </button>
+          <button class="tbtn" onclick={() => (showBootAnimModal = true)} disabled={fwState.imageList.length === 0}>
+            <i class="fa-solid fa-film"></i> boot animation
+          </button>
         </div>
 
         <div class="tg tg-footer">
@@ -440,6 +445,14 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if showBootAnimModal}
+  <BootAnimationWindow
+    imageList={fwState.imageList}
+    onApply={(mappings) => { fwState.handleSequenceReplace(mappings); showBootAnimModal = false; }}
+    onClose={() => (showBootAnimModal = false)}
+  />
 {/if}
 
 {#if fwState.originalFirmwareData && showSequenceReplacer}
