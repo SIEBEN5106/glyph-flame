@@ -72,7 +72,7 @@
   });
 
   $effect(() => {
-    document.title = fwState.originalFirmwareData ? `${fwState.loadedFileName} — ocean flame` : "ocean flame";
+    document.title = fwState.originalFirmwareData ? `${fwState.loadedFileName} — oflame.reign` : "oflame.reign";
   });
 
   function handleKeyDown(e: KeyboardEvent) {
@@ -196,7 +196,7 @@
     <header class="header">
       <div class="hd-left">
         <button class="hd-brand" onclick={cycleTheme} title="cycle theme → {currentTheme.label}">
-          ocean flame<span class="hd-dot">.</span>
+          oflame<span class="hd-dot">.</span>reign
         </button>
         <span class="hd-sep">/</span>
         <span class="hd-file">{fwState.loadedFileName}</span>
@@ -412,15 +412,15 @@
 {#if showAboutModal}
   <div class="modal-back" onclick={(e) => e.target === e.currentTarget && (showAboutModal = false)}>
     <div class="modal">
-      <div class="modal-head">about ocean flame</div>
+      <div class="modal-head">about oflame</div>
       <div class="modal-body">
-        <div class="ab-title">ocean flame<span class="ab-ver">v1.0</span></div>
+        <div class="ab-title">oflame<span class="ab-ver">v2.0</span></div>
         <p class="ab-desc">firmware image editor for snowsky echo and echo mini. fork of flameocean with echo (non-mini) support and a redesigned ui.</p>
         <div class="ab-links">
           <a class="ab-link" href="https://github.com/unitreign/ocean-flame" target="_blank" rel="noopener">
             <i class="fa-brands fa-github"></i>
             <div>
-              <div class="ab-link-title">ocean flame (this fork)</div>
+              <div class="ab-link-title">oflame (this fork)</div>
               <div class="ab-link-sub">github.com/unitreign/ocean-flame</div>
             </div>
           </a>
