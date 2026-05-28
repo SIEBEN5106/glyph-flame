@@ -1,156 +1,74 @@
 <script lang="ts">
-  import type { Snippet } from "svelte";
-  import { debugMode, debugAnimationComplete } from "$lib/stores";
-  import Window from "./Window.svelte";
-  import WindowBody from "./WindowBody.svelte";
-  import ProgressBar from "./ProgressBar.svelte";
-
-  interface StatusField {
-    text: string;
-    class?: string;
-  }
+  import type { Snippet } from 'svelte';
+  import { debugMode, debugAnimationComplete } from '$lib/stores';
 
   interface Props {
     title?: string;
     message?: string;
     progress?: number;
     showProgress?: boolean;
-    showClose?: boolean;
-    width?: string;
     children?: Snippet;
-    statusFields?: StatusField[];
   }
 
-  let {
-    title,
-    message,
-    progress = 0,
-    showProgress = true,
-    showClose = false,
-    width = "400px",
-    children,
-    statusFields,
-  }: Props = $props();
+  let { title = 'loading', message, progress = 0, showProgress = true, children }: Props = $props();
 
-  // Subscribe to global debug mode store using state for proper reactivity
   let debug = $state(false);
-  debugMode.subscribe((value) => {
-    debug = value;
-  });
-
-  // Debug mode: animate progress over 10 seconds
   let displayedProgress = $state(0);
-  let debugFrameId: number | null = null;
+  let frameId: number | null = null;
+
+  debugMode.subscribe((v) => (debug = v));
 
   $effect(() => {
     if (debug) {
-      // Mark animation as in progress
       debugAnimationComplete.set(false);
-
-      // Animate from 0 to 100 over 10 seconds
       displayedProgress = 0;
-      const startTime = Date.now();
-      const duration = 10000; // 10 seconds
-
-      const animate = () => {
-        const elapsed = Date.now() - startTime;
-        displayedProgress = Math.min((elapsed / duration) * 100, 100);
-
-        if (displayedProgress < 100) {
-          debugFrameId = requestAnimationFrame(animate);
-        } else {
-          // Animation complete
-          debugAnimationComplete.set(true);
-        }
+      const start = Date.now();
+      const tick = () => {
+        displayedProgress = Math.min(((Date.now() - start) / 10000) * 100, 100);
+        if (displayedProgress < 100) frameId = requestAnimationFrame(tick);
+        else debugAnimationComplete.set(true);
       };
-
-      debugFrameId = requestAnimationFrame(animate);
-
-      return () => {
-        if (debugFrameId !== null) {
-          cancelAnimationFrame(debugFrameId);
-          debugFrameId = null;
-        }
-      };
+      frameId = requestAnimationFrame(tick);
+      return () => { if (frameId) cancelAnimationFrame(frameId); };
     } else {
       displayedProgress = progress;
     }
   });
 </script>
 
-<div class="loading-wrapper">
-  <Window {title} {width} {statusFields} {showClose}>
-    <WindowBody>
-      <div class="loading-content">
-        {#if showProgress}
-          <div class="loading-progress-row">
-            <div class="loading-icon"></div>
-            <div class="loading-progress-bar">
-              <ProgressBar value={displayedProgress} />
-            </div>
-          </div>
-        {/if}
-
-        {#if message}
-          <p class="loading-message">{message}</p>
-        {/if}
-
-        {#if children}
-          {@render children()}
-        {/if}
-      </div>
-    </WindowBody>
-  </Window>
+<div class="backdrop">
+  <div class="dialog">
+    <div class="dialog-head">{title}</div>
+    <div class="dialog-body">
+      {#if showProgress}
+        <div class="prog-row">
+          <div class="prog-track"><div class="prog-fill" style="width:{displayedProgress}%"></div></div>
+          <span class="prog-pct">{Math.round(displayedProgress)}%</span>
+        </div>
+      {/if}
+      {#if message}<p class="msg">{message}</p>{/if}
+      {#if children}{@render children()}{/if}
+    </div>
+  </div>
 </div>
 
 <style>
-  .loading-wrapper {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10001;
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center; z-index: 10001;
   }
-
-  .loading-content {
-    padding: 8px;
+  .dialog {
+    background: var(--bg); border: 1px solid var(--border2);
+    border-radius: 5px; width: 320px; overflow: hidden;
   }
-
-  .loading-progress-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+  .dialog-head {
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-dim);
   }
-
-  .loading-icon {
-    width: 48px;
-    height: 48px;
-    background-image: url("/data-loading.svg");
-    background-size: 384px 48px;
-    animation: loading-animation 1s steps(8) infinite;
-    flex-shrink: 0;
-  }
-
-  .loading-progress-bar {
-    flex: 1;
-  }
-
-  @keyframes loading-animation {
-    0% {
-      background-position: 0px 0px;
-    }
-    100% {
-      background-position: -384px 0px;
-    }
-  }
-
-  .loading-message {
-    margin: 12px 0 0 0;
-    color: #000000;
-    text-align: center;
-  }
+  .dialog-body { padding: 16px; }
+  .prog-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .prog-track { flex: 1; height: 1px; background: var(--border2); }
+  .prog-fill { height: 100%; background: var(--accent); transition: width 0.1s; }
+  .prog-pct { font-size: 10px; color: var(--text-faint); width: 28px; text-align: right; flex-shrink: 0; }
+  .msg { font-size: 11px; color: var(--text-faint); }
 </style>

@@ -1,764 +1,228 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { clsx } from 'clsx';
-	import Button from './Button.svelte';
-	import Window from './Window.svelte';
+  import { onMount } from 'svelte';
 
-	interface Props {
-		storageKey?: string;
-		onColorSelect?: (rgb: { r: number; g: number; b: number }) => void;
-		onClose?: () => void;
-	}
+  interface Props {
+    storageKey?: string;
+    onColorSelect?: (rgb: { r: number; g: number; b: number }) => void;
+    onClose?: () => void;
+  }
 
-	let { storageKey = 'win98_oklch_custom_colors', onColorSelect, onClose }: Props = $props();
+  let { storageKey = 'of_custom_colors', onColorSelect, onClose }: Props = $props();
 
-	// Constants
-	const MAX_CHROMA = 0.37;
-	const BASIC_COLORS = [
-		'#FF8080',
-		'#FFFF80',
-		'#80FF80',
-		'#00FF80',
-		'#80FFFF',
-		'#0080FF',
-		'#FF80C0',
-		'#FF80FF',
-		'#FF0000',
-		'#FFFF00',
-		'#80FF00',
-		'#00FF40',
-		'#00FFFF',
-		'#0080C0',
-		'#8080C0',
-		'#FF00FF',
-		'#804040',
-		'#FF8040',
-		'#00FF00',
-		'#008080',
-		'#004080',
-		'#8080FF',
-		'#800040',
-		'#FF0080',
-		'#800000',
-		'#FF8000',
-		'#008000',
-		'#008040',
-		'#0000FF',
-		'#0000A0',
-		'#800080',
-		'#8000FF',
-		'#400000',
-		'#804000',
-		'#004000',
-		'#004040',
-		'#000080',
-		'#000040',
-		'#400040',
-		'#400080',
-		'#000000',
-		'#808000',
-		'#808080',
-		'#808040',
-		'#C0C0C0',
-		'#408080',
-		'#FFFFFF',
-		'#408040'
-	];
+  const MAX_CHROMA = 0.37;
+  let oklch = $state({ l: 0.7, c: 0.15, h: 200 });
+  let customColors = $state<string[]>(Array(16).fill(''));
+  let spectrumCanvas = $state<HTMLCanvasElement | undefined>();
+  let lumCanvas = $state<HTMLCanvasElement | undefined>();
+  let isDraggingSpectrum = $state(false);
+  let isDraggingLum = $state(false);
+  let hexInput = $state('');
 
-	// State
-	let isExpanded = $state(false);
-	let oklch = $state({ l: 0.7, c: 0.15, h: 200 });
-	let selectedIndex: number | null = $state(null);
-	let customColors = $state<string[]>(Array(16).fill('#FFFFFF'));
+  onMount(() => {
+    try { const s = localStorage.getItem(storageKey); if (s) { const p = JSON.parse(s); if (Array.isArray(p)) customColors = [...p.slice(0,16), ...Array(16).fill('')].slice(0,16); } } catch {}
+  });
 
-	// Refs
-	let spectrumCanvas = $state<HTMLCanvasElement | undefined>();
-	let lumCanvas = $state<HTMLCanvasElement | undefined>();
-	let isDraggingSpectrum = $state(false);
-	let isDraggingLum = $state(false);
+  $effect(() => { try { localStorage.setItem(storageKey, JSON.stringify(customColors)); } catch {} });
 
-	// Initialize custom colors from localStorage
-	onMount(() => {
-		try {
-			const saved = localStorage.getItem(storageKey);
-			if (saved) {
-				const parsed = JSON.parse(saved);
-				if (Array.isArray(parsed)) {
-					const validColors = parsed.slice(0, 16);
-					while (validColors.length < 16) {
-						validColors.push('#FFFFFF');
-					}
-					customColors = validColors;
-				}
-			}
-		} catch (e) {
-			console.error('Failed to load colors:', e);
-		}
-	});
+  const rgb = $derived.by(() => {
+    const [r,g,b] = oklchToRgb(oklch.l, oklch.c, oklch.h);
+    return { r, g, b };
+  });
 
-	// Sync customColors to localStorage
-	$effect(() => {
-		localStorage.setItem(storageKey, JSON.stringify(customColors));
-	});
+  $effect(() => { hexInput = '#' + rgb.r.toString(16).padStart(2,'0') + rgb.g.toString(16).padStart(2,'0') + rgb.b.toString(16).padStart(2,'0'); });
 
-	// Derived RGB values
-	let rgb = $derived.by(() => {
-		const [r, g, b] = oklchToRgb(oklch.l, oklch.c, oklch.h);
-		return { r, g, b };
-	});
+  $effect(() => {
+    if (!spectrumCanvas) return;
+    oklch.l;
+    const ctx = spectrumCanvas.getContext('2d')!;
+    const w = 200, h = 200;
+    const d = ctx.createImageData(w, h);
+    for (let y = 0; y < h; y++) {
+      const c = MAX_CHROMA * (1 - y/h);
+      for (let x = 0; x < w; x++) {
+        const hh = (x/w) * 360;
+        const [r,g,b] = oklchToRgb(oklch.l, c, hh);
+        const i = (y*w+x)*4;
+        d.data[i]=r; d.data[i+1]=g; d.data[i+2]=b; d.data[i+3]=255;
+      }
+    }
+    ctx.putImageData(d, 0, 0);
+  });
 
-	// Draw main spectrum
-	$effect(() => {
-		if (!isExpanded || !spectrumCanvas) return;
+  $effect(() => {
+    if (!lumCanvas) return;
+    oklch.h; oklch.c;
+    const ctx = lumCanvas.getContext('2d')!;
+    const d = ctx.createImageData(16, 200);
+    for (let y = 0; y < 200; y++) {
+      const l = 1 - y/200;
+      const [r,g,b] = oklchToRgb(l, oklch.c, oklch.h);
+      for (let x = 0; x < 16; x++) {
+        const i = (y*16+x)*4;
+        d.data[i]=r; d.data[i+1]=g; d.data[i+2]=b; d.data[i+3]=255;
+      }
+    }
+    ctx.putImageData(d, 0, 0);
+  });
 
-		const ctx = spectrumCanvas.getContext('2d');
-		if (!ctx) return;
-		const width = spectrumCanvas.width;
-		const height = spectrumCanvas.height;
+  $effect(() => {
+    const up = () => { isDraggingSpectrum = false; isDraggingLum = false; };
+    const mv = (e: MouseEvent) => { if (isDraggingSpectrum) onSMove(e); if (isDraggingLum) onLMove(e); };
+    window.addEventListener('mouseup', up); window.addEventListener('mousemove', mv);
+    return () => { window.removeEventListener('mouseup', up); window.removeEventListener('mousemove', mv); };
+  });
 
-		const imgData = ctx.createImageData(width, height);
-		const data = imgData.data;
+  function clamp(x: number, lo: number, hi: number) { return Math.min(Math.max(x, lo), hi); }
+  function linToSrgb(c: number) { return c >= 0.0031308 ? 1.055*Math.pow(c,1/2.4)-0.055 : 12.92*c; }
+  function srgbToLin(c: number) { return c >= 0.04045 ? Math.pow((c+0.055)/1.055,2.4) : c/12.92; }
 
-		for (let y = 0; y < height; y++) {
-			const cVal = MAX_CHROMA * (1 - y / height);
-			for (let x = 0; x < width; x++) {
-				const hVal = (x / width) * 360;
-				const [r, g, b] = oklchToRgb(oklch.l, cVal, hVal);
+  function oklchToRgb(l: number, c: number, h: number): [number,number,number] {
+    const hr = h*Math.PI/180, a = c*Math.cos(hr), b = c*Math.sin(hr);
+    const l_ = l+0.3963377774*a+0.2158037573*b;
+    const m_ = l-0.1055613458*a-0.0638541728*b;
+    const s_ = l-0.0894841775*a-1.291485548*b;
+    const l3=l_**3, m3=m_**3, s3=s_**3;
+    let r=4.0767416621*l3-3.3077115913*m3+0.2309699292*s3;
+    let g=-1.2684380046*l3+2.6097574011*m3-0.3413193965*s3;
+    let bv=-0.0041960863*l3-0.7034186147*m3+1.707614701*s3;
+    return [Math.round(clamp(linToSrgb(r),0,1)*255),Math.round(clamp(linToSrgb(g),0,1)*255),Math.round(clamp(linToSrgb(bv),0,1)*255)];
+  }
 
-				const idx = (y * width + x) * 4;
-				data[idx] = r;
-				data[idx + 1] = g;
-				data[idx + 2] = b;
-				data[idx + 3] = 255;
-			}
-		}
-		ctx.putImageData(imgData, 0, 0);
-	});
+  function rgbToOklch(r: number, g: number, b: number) {
+    r=srgbToLin(r/255); g=srgbToLin(g/255); b=srgbToLin(b/255);
+    const l_=Math.cbrt(0.4122214708*r+0.5363325363*g+0.0514459929*b);
+    const m_=Math.cbrt(0.2119034982*r+0.6806995451*g+0.1073969566*b);
+    const s_=Math.cbrt(0.0883024619*r+0.2817188376*g+0.6299787005*b);
+    const L=0.2104542553*l_+0.793617785*m_-0.004072*s_;
+    const a=1.9779984951*l_-2.428592205*m_+0.7827717662*s_-0.808675766*s_;
+    const B=0.0259040371*l_+0.7827717662*m_-0.808675766*s_;
+    let H=Math.atan2(B,a)*180/Math.PI; if(H<0)H+=360;
+    return { l:L, c:Math.sqrt(a*a+B*B), h:H };
+  }
 
-	// Draw luminance bar
-	$effect(() => {
-		if (!isExpanded || !lumCanvas) return;
+  function onSMove(e: MouseEvent) {
+    if (!spectrumCanvas) return;
+    const r = spectrumCanvas.getBoundingClientRect();
+    const x = clamp(e.clientX-r.left,0,200), y = clamp(e.clientY-r.top,0,200);
+    oklch = { ...oklch, h: (x/200)*360, c: MAX_CHROMA*(1-y/200) };
+  }
+  function onLMove(e: MouseEvent) {
+    if (!lumCanvas) return;
+    const r = lumCanvas.getBoundingClientRect();
+    oklch = { ...oklch, l: 1-clamp(e.clientY-r.top,0,200)/200 };
+  }
+  function onHexInput(e: Event) {
+    const val = (e.target as HTMLInputElement).value.trim().replace('#','');
+    if (val.length === 6 && /^[0-9a-fA-F]+$/.test(val)) {
+      oklch = rgbToOklch(parseInt(val.slice(0,2),16),parseInt(val.slice(2,4),16),parseInt(val.slice(4,6),16));
+    }
+  }
+  function onRgbIn(field: 'r'|'g'|'b', val: string) {
+    const v = clamp(parseInt(val)||0,0,255);
+    const c = rgb;
+    oklch = rgbToOklch(field==='r'?v:c.r, field==='g'?v:c.g, field==='b'?v:c.b);
+  }
+  function addCustom() { customColors = [`rgb(${rgb.r},${rgb.g},${rgb.b})`, ...customColors.slice(0,15)]; }
+  function pickSwatch(s: string) {
+    if (!s) return;
+    if (s.startsWith('#')) {
+      const h=s.slice(1); oklch=rgbToOklch(parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16));
+    } else { const m=s.match(/\d+/g); if(m){const[r,g,b]=[+m[0],+m[1],+m[2]]; oklch=rgbToOklch(r,g,b); onColorSelect?.({r,g,b}); } }
+  }
+  function confirm() { onColorSelect?.(rgb); onClose?.(); }
 
-		const ctx = lumCanvas.getContext('2d');
-		if (!ctx) return;
-		const width = lumCanvas.width;
-		const height = lumCanvas.height;
-
-		const imgData = ctx.createImageData(width, height);
-		const data = imgData.data;
-
-		for (let y = 0; y < height; y++) {
-			const lVal = 1 - y / height;
-			const [r, g, b] = oklchToRgb(lVal, oklch.c, oklch.h);
-
-			for (let x = 0; x < width; x++) {
-				const idx = (y * width + x) * 4;
-				data[idx] = r;
-				data[idx + 1] = g;
-				data[idx + 2] = b;
-				data[idx + 3] = 255;
-			}
-		}
-		ctx.putImageData(imgData, 0, 0);
-	});
-
-	// Global mouse event handlers
-	$effect(() => {
-		const handleUp = () => {
-			isDraggingSpectrum = false;
-			isDraggingLum = false;
-		};
-		const handleMove = (e: MouseEvent) => {
-			if (isDraggingSpectrum) handleSpectrumInteract(e);
-			if (isDraggingLum) handleLumInteract(e);
-		};
-
-		window.addEventListener('mouseup', handleUp);
-		window.addEventListener('mousemove', handleMove);
-
-		return () => {
-			window.removeEventListener('mouseup', handleUp);
-			window.removeEventListener('mousemove', handleMove);
-		};
-	});
-
-	// Helper functions
-	function clamp(x: number, min: number, max: number) {
-		return Math.min(Math.max(x, min), max);
-	}
-
-	function linearToSrgb(c: number) {
-		return c >= 0.0031308 ? 1.055 * Math.pow(c, 1.0 / 2.4) - 0.055 : 12.92 * c;
-	}
-
-	function srgbToLinear(c: number) {
-		return c >= 0.04045 ? Math.pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
-	}
-
-	function oklchToRgb(l: number, c: number, h: number) {
-		const hRad = h * (Math.PI / 180);
-		const a = c * Math.cos(hRad);
-		const b = c * Math.sin(hRad);
-
-		const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
-		const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
-		const s_ = l - 0.0894841775 * a - 1.291485548 * b;
-
-		const l__ = l_ * l_ * l_;
-		const m__ = m_ * m_ * m_;
-		const s__ = s_ * s_ * s_;
-
-		let r = +4.0767416621 * l__ - 3.3077115913 * m__ + 0.2309699292 * s__;
-		let g = -1.2684380046 * l__ + 2.6097574011 * m__ - 0.3413193965 * s__;
-		let bl = -0.0041960863 * l__ - 0.7034186147 * m__ + 1.707614701 * s__;
-
-		r = linearToSrgb(r);
-		g = linearToSrgb(g);
-		bl = linearToSrgb(bl);
-
-		return [
-			Math.round(clamp(r, 0, 1) * 255),
-			Math.round(clamp(g, 0, 1) * 255),
-			Math.round(clamp(bl, 0, 1) * 255)
-		];
-	}
-
-	function rgbToOklch(r: number, g: number, b: number) {
-		r = srgbToLinear(r / 255);
-		g = srgbToLinear(g / 255);
-		b = srgbToLinear(b / 255);
-
-		const l_ = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
-		const m_ = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
-		const s_ = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
-
-		const l__ = Math.cbrt(l_);
-		const m__ = Math.cbrt(m_);
-		const s__ = Math.cbrt(s_);
-
-		const L = 0.2104542553 * l__ + 0.793617785 * m__ - 0.0040720468 * s__;
-		const a = 1.9779984951 * l__ - 2.428592205 * m__ + 0.4505937099 * s__;
-		const B = 0.0259040371 * l__ + 0.7827717662 * m__ - 0.808675766 * s__;
-
-		const C = Math.sqrt(a * a + B * B);
-		let H = Math.atan2(B, a) * (180 / Math.PI);
-		if (H < 0) H += 360;
-
-		return { l: L, c: C, h: H };
-	}
-
-	function handleSpectrumInteract(e: MouseEvent) {
-		if (!spectrumCanvas) return;
-		const rect = spectrumCanvas.getBoundingClientRect();
-		let x = e.clientX - rect.left;
-		let y = e.clientY - rect.top;
-
-		x = Math.max(0, Math.min(x, 200));
-		y = Math.max(0, Math.min(y, 200));
-
-		const newH = (x / 200) * 360;
-		const newC = MAX_CHROMA * (1 - y / 200);
-
-		oklch = { ...oklch, h: newH, c: newC };
-	}
-
-	function handleLumInteract(e: MouseEvent) {
-		if (!lumCanvas) return;
-		const rect = lumCanvas.getBoundingClientRect();
-		let y = e.clientY - rect.top;
-		y = Math.max(0, Math.min(y, 200));
-		const newL = 1 - y / 200;
-		oklch = { ...oklch, l: newL };
-	}
-
-	function updateFromRgb(field: 'r' | 'g' | 'b', value: string) {
-		let val = parseInt(value) || 0;
-		val = Math.max(0, Math.min(255, val));
-		const currentRgb = rgb;
-		const newRgb = { ...currentRgb, [field]: val };
-		const newOklch = rgbToOklch(newRgb.r, newRgb.g, newRgb.b);
-		oklch = newOklch;
-	}
-
-	function updateFromOklch(field: 'l' | 'c' | 'h', value: string) {
-		let val = parseFloat(value) || 0;
-		if (field === 'h') {
-			val = Math.max(0, Math.min(360, val));
-			oklch = { ...oklch, h: val };
-		} else if (field === 'c') {
-			val = Math.max(0, Math.min(100, val));
-			oklch = { ...oklch, c: (val / 100) * MAX_CHROMA };
-		} else if (field === 'l') {
-			val = Math.max(0, Math.min(100, val));
-			oklch = { ...oklch, l: val / 100 };
-		}
-	}
-
-	function handleCustomColorAdd() {
-		const currentRgb = rgb;
-		const colorString = `rgb(${currentRgb.r}, ${currentRgb.g}, ${currentRgb.b})`;
-		customColors = [colorString, ...customColors.slice(0, 15)];
-	}
-
-	function selectColor(hexOrRgb: string) {
-		let r: number, g: number, b: number;
-		if (hexOrRgb.startsWith('#')) {
-			const hex = hexOrRgb.substring(1);
-			r = parseInt(hex.substring(0, 2), 16);
-			g = parseInt(hex.substring(2, 4), 16);
-			b = parseInt(hex.substring(4, 6), 16);
-		} else {
-			const parts = hexOrRgb.match(/\d+/g);
-			if (parts) {
-				r = parseInt(parts[0]);
-				g = parseInt(parts[1]);
-				b = parseInt(parts[2]);
-			} else {
-				return;
-			}
-		}
-		const newOklch = rgbToOklch(r, g, b);
-		oklch = newOklch;
-		onColorSelect?.({ r, g, b });
-	}
-
-	function handleOkClick() {
-		onColorSelect?.(rgb);
-		onClose?.();
-	}
-
-	function toggleExpanded() {
-		isExpanded = !isExpanded;
-	}
+  const PALETTE = [
+    '#ffffff','#d4d4d4','#a0a0a0','#707070','#404040','#202020','#000000','#ff4444',
+    '#ff8844','#ffcc00','#88cc00','#00cc88','#0088ff','#8844ff','#ff44cc','#884444',
+    '#cc3300','#ff6600','#ffaa00','#99cc33','#33cc99','#3399ff','#6633cc','#cc3399',
+    '#550000','#884400','#886600','#446600','#004433','#003366','#220044','#440022',
+  ];
 </script>
 
-<Window title="Edit Colors" onclose={onClose} class="color-dialog">
-	<div class="window-body">
-		<div class="dialog-content">
-			<!-- LEFT SECTION -->
-			<div class="section-left">
-				<div>
-					<div style="margin-bottom: 4px">Basic colors:</div>
-					<div class="color-grid">
-						{#each BASIC_COLORS as color, i (color)}
-							<div
-								class="color-swatch"
-								style="background-color: {color}"
-								onclick={() => selectColor(color)}
-								title={color}
-								role="button"
-								tabindex="0"
-								onkeydown={(e) => e.key === 'Enter' && selectColor(color)}
-							></div>
-						{/each}
-					</div>
-				</div>
-
-				<div style="margin-top: 12px">
-					<div style="margin-bottom: 4px">Custom colors:</div>
-					<div class="color-grid">
-						{#each customColors as color, i (i)}
-							<div
-								class={clsx('color-swatch', selectedIndex === i && 'selected')}
-								style="background-color: {color}"
-								onclick={() => {
-									selectedIndex = i;
-									if (color !== '#FFFFFF' && color !== 'rgb(255, 255, 255)') {
-										selectColor(color);
-									}
-								}}
-								role="button"
-								tabindex="0"
-								onkeydown={(e) => e.key === 'Enter' && selectColor(color)}
-							></div>
-						{/each}
-					</div>
-				</div>
-
-				<Button
-					class="full-width-btn"
-					onclick={toggleExpanded}
-					disabled={isExpanded}
-				>
-					Define Custom Colors &gt;&gt;
-				</Button>
-
-				<div class="actions">
-					<button onclick={handleOkClick} style="min-width: 70px; margin-right: 8px">OK</button>
-					<button onclick={onClose} style="min-width: 70px">Cancel</button>
-				</div>
-			</div>
-
-			<!-- RIGHT SECTION (Conditional) -->
-			{#if isExpanded}
-				<div class="section-right">
-					<div style="display: flex; align-items: flex-start">
-						<!-- Main Spectrum Box -->
-						<div
-							class="spectrum-container"
-							role="slider"
-							aria-label="Color spectrum"
-							aria-valuemin="0"
-							aria-valuemax="360"
-							aria-valuenow={oklch.h}
-							tabindex="0"
-							onmousedown={(e) => {
-								isDraggingSpectrum = true;
-								handleSpectrumInteract(e);
-							}}
-						>
-							<div class="main-spectrum-wrapper">
-								<canvas
-									bind:this={spectrumCanvas}
-									width={200}
-									height={200}
-									class="main-spectrum-canvas"
-								></canvas>
-								<div
-									class="spectrum-cursor"
-									style="left: {(oklch.h / 360) * 200}px; top: {(1 - oklch.c / MAX_CHROMA) * 200}px;"
-								>
-									<div class="spectrum-cursor-inner"></div>
-								</div>
-							</div>
-						</div>
-
-						<!-- Luminance Slider -->
-						<div
-							class="lum-slider-wrapper"
-							role="slider"
-							aria-label="Lightness"
-							aria-valuemin="0"
-							aria-valuemax="100"
-							aria-valuenow={Math.round(oklch.l * 100)}
-							tabindex="0"
-							onmousedown={(e) => {
-								isDraggingLum = true;
-								handleLumInteract(e);
-							}}
-						>
-							<canvas
-								bind:this={lumCanvas}
-								width={20}
-								height={200}
-								class="lum-canvas"
-							></canvas>
-							<div
-								class="lum-arrow"
-								role="slider"
-								aria-label="Lightness arrow"
-								aria-valuenow={Math.round(oklch.l * 100)}
-								tabindex="0"
-								onmousedown={(e) => {
-									isDraggingLum = true;
-									e.stopPropagation();
-									handleLumInteract(e);
-								}}
-								style="top: {(1 - oklch.l) * 200 + 2}px;"
-							></div>
-						</div>
-					</div>
-
-					<!-- Inputs and Preview -->
-					<div class="inputs-area">
-						<div class="preview-column">
-							<div
-								class="preview-box"
-								style="background-color: rgb({rgb.r}, {rgb.g}, {rgb.b})"
-							></div>
-							<div>Solid Color</div>
-						</div>
-
-						<div class="input-group">
-							<div class="value-row">
-								<label for="hue-input" title="Hue (0-360)">Hue:</label>
-								<input
-									id="hue-input"
-									type="text"
-									value={Math.round(oklch.h)}
-									oninput={(e) => updateFromOklch('h', e.currentTarget.value)}
-								/>
-							</div>
-							<div class="value-row">
-								<label for="chr-input" title="Chroma (0-100)">Chr:</label>
-								<input
-									id="chr-input"
-									type="text"
-									value={Math.round((oklch.c / MAX_CHROMA) * 100)}
-									oninput={(e) => updateFromOklch('c', e.currentTarget.value)}
-								/>
-							</div>
-							<div class="value-row">
-								<label for="lit-input" title="Lightness (0-100)">Lit:</label>
-								<input
-									id="lit-input"
-									type="text"
-									value={Math.round(oklch.l * 100)}
-									oninput={(e) => updateFromOklch('l', e.currentTarget.value)}
-								/>
-							</div>
-						</div>
-
-						<div class="input-group">
-							<div class="value-row">
-								<label for="red-input">Red:</label>
-								<input
-									id="red-input"
-									type="text"
-									value={rgb.r}
-									oninput={(e) => updateFromRgb('r', e.currentTarget.value)}
-								/>
-							</div>
-							<div class="value-row">
-								<label for="green-input">Green:</label>
-								<input
-									id="green-input"
-									type="text"
-									value={rgb.g}
-									oninput={(e) => updateFromRgb('g', e.currentTarget.value)}
-								/>
-							</div>
-							<div class="value-row">
-								<label for="blue-input">Blue:</label>
-								<input
-									id="blue-input"
-									type="text"
-									value={rgb.b}
-									oninput={(e) => updateFromRgb('b', e.currentTarget.value)}
-								/>
-							</div>
-						</div>
-					</div>
-
-					<Button
-						class="full-width-btn"
-						onclick={handleCustomColorAdd}
-						style="margin-top: auto"
-					>
-						Add to Custom Colors
-					</Button>
-				</div>
-			{/if}
-		</div>
-	</div>
-</Window>
+<div class="backdrop" onclick={(e) => e.target === e.currentTarget && onClose?.()}>
+  <div class="picker">
+    <div class="picker-head">color picker</div>
+    <div class="picker-body">
+      <div class="canvas-area">
+        <div class="spectrum-wrap"
+          onmousedown={(e) => { isDraggingSpectrum=true; onSMove(e); }}
+          role="slider" tabindex="0" aria-label="hue/chroma" aria-valuenow={Math.round(oklch.h)}>
+          <canvas bind:this={spectrumCanvas} width={200} height={200} class="sp-canvas"></canvas>
+          <div class="sp-cursor" style="left:{(oklch.h/360)*200}px;top:{(1-oklch.c/MAX_CHROMA)*200}px;"></div>
+        </div>
+        <div class="lum-wrap"
+          onmousedown={(e) => { isDraggingLum=true; onLMove(e); }}
+          role="slider" tabindex="0" aria-label="lightness" aria-valuenow={Math.round(oklch.l*100)}>
+          <canvas bind:this={lumCanvas} width={16} height={200} class="lum-canvas"></canvas>
+          <div class="lum-cursor" style="top:{(1-oklch.l)*200}px;"></div>
+        </div>
+      </div>
+      <div class="inputs-area">
+        <div class="preview" style="background:rgb({rgb.r},{rgb.g},{rgb.b});"></div>
+        <div class="field"><span class="fl">hex</span>
+          <input class="fi fi-hex" value={hexInput} oninput={onHexInput} spellcheck="false" maxlength="7" /></div>
+        <div class="field"><span class="fl">r</span>
+          <input class="fi" type="number" min="0" max="255" value={rgb.r} oninput={(e)=>onRgbIn('r',(e.target as HTMLInputElement).value)} /></div>
+        <div class="field"><span class="fl">g</span>
+          <input class="fi" type="number" min="0" max="255" value={rgb.g} oninput={(e)=>onRgbIn('g',(e.target as HTMLInputElement).value)} /></div>
+        <div class="field"><span class="fl">b</span>
+          <input class="fi" type="number" min="0" max="255" value={rgb.b} oninput={(e)=>onRgbIn('b',(e.target as HTMLInputElement).value)} /></div>
+        <div class="field"><span class="fl">h</span>
+          <input class="fi" type="number" min="0" max="360" value={Math.round(oklch.h)} oninput={(e)=>oklch={...oklch,h:clamp(+(e.target as HTMLInputElement).value,0,360)}} /></div>
+        <div class="field"><span class="fl">l</span>
+          <input class="fi" type="number" min="0" max="100" value={Math.round(oklch.l*100)} oninput={(e)=>oklch={...oklch,l:clamp(+(e.target as HTMLInputElement).value,0,100)/100}} /></div>
+      </div>
+    </div>
+    <div class="swatch-sec">
+      <div class="sw-label">palette</div>
+      <div class="swatches">
+        {#each PALETTE as s}<button class="sw" style="background:{s};" onclick={() => pickSwatch(s)} title={s}></button>{/each}
+      </div>
+    </div>
+    <div class="swatch-sec">
+      <div class="sw-label">saved <button class="sw-add-btn" onclick={addCustom}>+ save current</button></div>
+      <div class="swatches">
+        {#each customColors as s}<button class="sw" class:sw-empty={!s} style={s?`background:${s}`:''} onclick={()=>s&&pickSwatch(s)}></button>{/each}
+      </div>
+    </div>
+    <div class="picker-foot">
+      <button class="dbtn dbtn-accent" onclick={confirm}>select</button>
+    </div>
+  </div>
+</div>
 
 <style>
-	.color-dialog {
-		width: auto;
-		display: inline-block;
-	}
-
-	.dialog-content {
-		display: flex;
-		gap: 16px;
-		padding: 4px;
-		align-items: flex-start;
-	}
-
-	.section-left {
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-
-	.section-right {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-
-	/* Color Grids */
-	.color-grid {
-		display: grid;
-		grid-template-columns: repeat(8, 1fr);
-		gap: 4px;
-	}
-
-	.color-swatch {
-		width: 20px;
-		height: 20px;
-		border: 2px solid;
-		border-color: #808080 #ffffff #ffffff #808080;
-		box-sizing: border-box;
-		cursor: pointer;
-	}
-
-	.color-swatch:active {
-		border-color: #ffffff #808080 #808080 #ffffff;
-	}
-
-	.color-swatch.selected {
-		outline: 1px dotted #000;
-		outline-offset: 1px;
-	}
-
-	/* Spectrum Area */
-	.spectrum-container {
-		display: flex;
-		background: #d4d0c8;
-		padding: 0;
-		border: 2px solid;
-		border-color: #808080 #ffffff #ffffff #808080;
-		position: relative;
-		width: fit-content;
-	}
-
-	.main-spectrum-wrapper {
-		position: relative;
-		width: 200px;
-		height: 200px;
-		cursor: crosshair;
-	}
-
-	.main-spectrum-canvas {
-		display: block;
-		border: none;
-	}
-
-	.spectrum-cursor {
-		position: absolute;
-		width: 11px;
-		height: 11px;
-		transform: translate(-5px, -5px);
-		pointer-events: none;
-	}
-
-	/* Crosshair graphic */
-	.spectrum-cursor::before,
-	.spectrum-cursor::after {
-		content: '';
-		position: absolute;
-		background: black;
-	}
-
-	.spectrum-cursor::before {
-		top: 0;
-		left: 4px;
-		width: 3px;
-		height: 11px;
-	}
-
-	.spectrum-cursor::after {
-		top: 4px;
-		left: 0;
-		width: 11px;
-		height: 3px;
-	}
-
-	/* Inner white cross */
-	.spectrum-cursor-inner {
-		position: absolute;
-		top: 0;
-		left: 0;
-		width: 100%;
-		height: 100%;
-	}
-
-	.spectrum-cursor-inner::before,
-	.spectrum-cursor-inner::after {
-		content: '';
-		position: absolute;
-		background: white;
-		z-index: 2;
-	}
-
-	.spectrum-cursor-inner::before {
-		top: 1px;
-		left: 5px;
-		width: 1px;
-		height: 9px;
-	}
-
-	.spectrum-cursor-inner::after {
-		top: 5px;
-		left: 1px;
-		width: 9px;
-		height: 1px;
-	}
-
-	.lum-slider-wrapper {
-		position: relative;
-		width: 26px;
-		height: 204px;
-		cursor: ns-resize;
-		margin-left: 10px;
-	}
-
-	.lum-canvas {
-		display: block;
-		border: 2px solid;
-		border-color: #808080 #ffffff #ffffff #808080;
-	}
-
-	.lum-arrow {
-		position: absolute;
-		left: 26px;
-		width: 0;
-		height: 0;
-		border-top: 5px solid transparent;
-		border-bottom: 5px solid transparent;
-		border-right: 8px solid black;
-		transform: translateY(-5px);
-		pointer-events: auto;
-		cursor: ns-resize;
-	}
-
-	/* Inputs Area */
-	.inputs-area {
-		display: flex;
-		gap: 10px;
-		margin-top: 0;
-	}
-
-	.preview-column {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: flex-start;
-	}
-
-	.preview-box {
-		width: 60px;
-		height: 50px;
-		border: 2px solid;
-		border-color: #808080 #ffffff #ffffff #808080;
-		margin-top: 0;
-		margin-bottom: 4px;
-	}
-
-	.input-group {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-
-	.value-row {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 6px;
-	}
-
-	.value-row label {
-		min-width: 30px;
-	}
-
-	.value-row input {
-		width: 40px;
-	}
-
-	.actions {
-		margin-top: 0;
-		display: flex;
-		justify-content: flex-start;
-	}
-
-	.full-width-btn {
-		width: 100%;
-	}
-
-	button {
-		min-width: 70px;
-	}
+  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 10002; }
+  .picker { background: var(--bg); border: 1px solid var(--border2); border-radius: 5px; width: 400px; overflow: hidden; display: flex; flex-direction: column; }
+  .picker-head { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-dim); }
+  .picker-body { display: flex; gap: 14px; padding: 14px 16px; }
+  .canvas-area { display: flex; gap: 8px; flex-shrink: 0; }
+  .spectrum-wrap { position: relative; width: 200px; height: 200px; cursor: crosshair; border: 1px solid var(--border); border-radius: 3px; overflow: hidden; }
+  .sp-canvas { display: block; width: 200px; height: 200px; }
+  .sp-cursor { position: absolute; width: 10px; height: 10px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.4); transform: translate(-5px,-5px); pointer-events: none; }
+  .lum-wrap { position: relative; width: 16px; height: 200px; cursor: ns-resize; }
+  .lum-canvas { display: block; width: 16px; height: 200px; border-radius: 3px; border: 1px solid var(--border); }
+  .lum-cursor { position: absolute; left: -3px; right: -3px; height: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.4); transform: translateY(-1px); pointer-events: none; }
+  .inputs-area { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+  .preview { height: 36px; border-radius: 3px; border: 1px solid var(--border); margin-bottom: 4px; flex-shrink: 0; }
+  .field { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--border); padding: 3px 0; }
+  .fl { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-faint); width: 14px; flex-shrink: 0; }
+  .fi { flex: 1; background: transparent; border: none; padding: 2px 0; font-size: 11px; color: var(--text-dim); font-family: 'DM Mono', monospace; outline: none; min-width: 0; }
+  .fi:focus { color: var(--text); }
+  .fi-hex { text-transform: uppercase; }
+  .fi::-webkit-inner-spin-button, .fi::-webkit-outer-spin-button { -webkit-appearance: none; }
+  .fi[type=number] { -moz-appearance: textfield; }
+  .swatch-sec { padding: 0 16px 10px; }
+  .sw-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-faint); margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  .sw-add-btn { background: none; border: none; font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text-faint); cursor: pointer; padding: 0; transition: color 0.15s; }
+  .sw-add-btn:hover { color: var(--accent); }
+  .swatches { display: flex; flex-wrap: wrap; gap: 3px; }
+  .sw { width: 18px; height: 18px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.06); cursor: pointer; transition: transform 0.1s; flex-shrink: 0; }
+  .sw:hover { transform: scale(1.2); }
+  .sw-empty { background: var(--surface2) !important; border: 1px dashed var(--border2) !important; }
+  .picker-foot { padding: 10px 16px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
+  .dbtn { background: none; border: none; border-bottom: 1px solid var(--border2); color: var(--text-dim); font-family: 'DM Mono', monospace; font-size: 12px; padding: 3px 0; cursor: pointer; transition: color 0.15s, border-color 0.15s; }
+  .dbtn:hover { color: var(--text); border-bottom-color: var(--text-dim); }
+  .dbtn-accent { color: var(--accent); border-bottom-color: var(--accent); }
+  .dbtn-accent:hover { opacity: 0.7; }
 </style>

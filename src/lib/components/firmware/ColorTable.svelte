@@ -1,158 +1,98 @@
 <script lang="ts">
-	import { TableView, type TableRow, type TableCell } from '$lib/components/98css';
+  export interface ColorEntry {
+    semantic: string;
+    color: number;
+    themeId?: number;
+    register?: number;
+    instruction?: string;
+    address?: string;
+    rawBytes?: number[];
+    movwInstruction?: string;
+    movwAddress?: string;
+    strhInstruction?: string;
+    strhAddress?: string;
+    isPatched?: boolean;
+  }
 
-	function rgb565ToCss(color: number): string {
-		const r = Math.round(((color >> 11) & 0x1f) * 255 / 31);
-		const g = Math.round(((color >> 5) & 0x3f) * 255 / 63);
-		const b = Math.round((color & 0x1f) * 255 / 31);
-		return `rgb(${r}, ${g}, ${b})`;
-	}
+  interface Props {
+    entries: ColorEntry[];
+    onDoubleClick?: (entry: ColorEntry) => void;
+    height?: string;
+    hideProperty?: boolean;
+    hideSource?: boolean;
+  }
 
-	export interface ColorEntry {
-		semantic: string;
-		color: number;
-		themeId?: number;
-		register?: number;
-		instruction?: string;
-		address?: string;
-		rawBytes?: number[];
-		movwInstruction?: string;
-		movwAddress?: string;
-		strhInstruction?: string;
-		strhAddress?: string;
-		isPatched?: boolean;
-	}
+  let { entries, onDoubleClick, height = '100%', hideProperty = false, hideSource = false }: Props = $props();
 
-	interface Props {
-		entries: ColorEntry[];
-		title?: string;
-		onDoubleClick?: (entry: ColorEntry) => void;
-		height?: string;
-		hideProperty?: boolean;
-		hideSource?: boolean;
-	}
+  let selectedIdx = $state<number | null>(null);
 
-	let { entries, title = 'Colors', onDoubleClick, height = '300px', hideProperty = false, hideSource = false }: Props = $props();
-
-	let selectedKey = $state<string | null>(null);
-
-	const headers = $derived(() => {
-		const h = [];
-		if (!hideProperty) h.push('Property');
-		h.push('Theme');
-		h.push('Register');
-		if (!hideSource) h.push('Source');
-		h.push('Color Value');
-		h.push('Preview');
-		return h;
-	});
-
-	// Convert to table rows
-	const rows = $derived.by(() => {
-		const result = entries.map((entry, idx) => {
-			const colorHex = '0x' + entry.color.toString(16).padStart(4, '0').toUpperCase();
-			const themeDisplay = entry.themeId !== undefined ? `Theme ${entry.themeId}` : 'N/A';
-			const regDisplay = entry.register !== undefined ? `R${entry.register}` : 'N/A';
-			const sourceDisplay = entry.isPatched ? 'Patched' : 'Not Patched';
-			const colorCss = rgb565ToCss(entry.color);
-
-			const cells: TableCell[] = [];
-
-			// Add columns based on visibility
-			if (!hideProperty) {
-				cells.push({ content: entry.semantic });
-			}
-			cells.push({ content: themeDisplay });
-			cells.push({ content: regDisplay });
-			if (!hideSource) {
-				cells.push({ content: sourceDisplay });
-			}
-			cells.push({ content: colorHex, class: 'mono' });
-			cells.push({ content: '', class: 'color-preview', style: `--color-bg: ${colorCss}` });
-
-			return {
-				key: `${entry.semantic}-${entry.themeId ?? 0}-${entry.register ?? 0}-${idx}`,
-				cells,
-				extra: entry
-			} as TableRow & { extra: ColorEntry };
-		});
-		return result;
-	});
-
-	function handleRowSelect(rowKey: string | null) {
-		selectedKey = rowKey;
-	}
-
-	function handleRowDoubleClick(rowKey: string) {
-		const row = rows.find((r) => r.key === rowKey);
-		if (row?.extra && onDoubleClick) {
-			onDoubleClick(row.extra);
-		}
-	}
+  function rgb565ToCss(color: number): string {
+    const r = Math.round(((color >> 11) & 0x1f) * 255 / 31);
+    const g = Math.round(((color >> 5) & 0x3f) * 255 / 63);
+    const b = Math.round((color & 0x1f) * 255 / 31);
+    return `rgb(${r},${g},${b})`;
+  }
 </script>
 
-<div class="color-table-container">
-	<TableView
-		headers={headers()}
-		{rows}
-		interactive={true}
-		bind:selectedRow={selectedKey}
-		onSelect={handleRowSelect}
-		onRowDoubleClick={handleRowDoubleClick}
-		{height}
-		width="100%"
-	/>
+<div class="ct" style="height:{height}">
+  <div class="ct-head">
+    {#if !hideProperty}<span class="ch flex3">property</span>{/if}
+    <span class="ch flex1">theme</span>
+    <span class="ch flex1">reg</span>
+    {#if !hideSource}<span class="ch flex1">status</span>{/if}
+    <span class="ch flex1">value</span>
+    <span class="ch swatch-col">color</span>
+  </div>
+  <div class="ct-body">
+    {#each entries as entry, i}
+      {@const css = rgb565ToCss(entry.color)}
+      {@const hex = '0x' + entry.color.toString(16).padStart(4,'0').toUpperCase()}
+      <div class="ct-row" class:selected={selectedIdx === i}
+        onclick={() => (selectedIdx = i)}
+        ondblclick={() => { selectedIdx = i; onDoubleClick?.(entry); }}
+        role="row" tabindex="0"
+        onkeydown={(e) => e.key === 'Enter' && onDoubleClick?.(entry)}
+        aria-selected={selectedIdx === i}>
+        {#if !hideProperty}
+          <span class="cd flex3" title={entry.semantic}>{entry.semantic}</span>
+        {/if}
+        <span class="cd flex1">{entry.themeId !== undefined ? `t${entry.themeId}` : '—'}</span>
+        <span class="cd flex1 mono">{entry.register !== undefined ? `r${entry.register}` : '—'}</span>
+        {#if !hideSource}
+          <span class="cd flex1" class:patched={entry.isPatched}>{entry.isPatched ? 'patched' : 'default'}</span>
+        {/if}
+        <span class="cd flex1 mono">{hex}</span>
+        <span class="cd swatch-col"><span class="sw" style="background:{css};"></span></span>
+      </div>
+    {/each}
+  </div>
+  {#if entries.length > 0}
+    <div class="ct-hint">→ double-click to view details</div>
+  {/if}
 </div>
 
 <style>
-	.color-table-container {
-		display: flex;
-		flex-direction: column;
-		height: 100%;
-		overflow: hidden;
-	}
-
-	:global(.color-table-container .sunken-panel) {
-		border: 2px inset #c0c0c0;
-		background-color: #ffffff;
-		overflow-y: auto;
-	}
-
-	/* Ensure table header stays on top */
-	:global(.color-table-container thead) {
-		position: sticky;
-		top: 0;
-		z-index: 10;
-		background-color: #ffffff;
-	}
-
-	/* Theme header row styling */
-	:global(.color-table-container .theme-header-row) {
-		background-color: #c0c0c0;
-	}
-
-	:global(.color-table-container .theme-header-row td) {
-		font-weight: bold;
-		text-align: center;
-		padding: 4px;
-		background-color: #c0c0c0;
-		color: #000000;
-	}
-
-	/* Color preview cell - need to inject it into the table cells */
-	:global(.color-table-container td:last-child) {
-		width: 50px;
-		padding: 2px !important;
-		text-align: center;
-	}
-
-	/* Color preview using CSS variable */
-	:global(.color-table-container td.color-preview::after) {
-		content: '';
-		display: inline-block;
-		width: 32px;
-		height: 12px;
-		background-color: var(--color-bg);
-		border: 1px solid #808080;
-	}
+  .ct { display: flex; flex-direction: column; overflow: hidden; width: 100%; }
+  .ct-head {
+    display: flex; align-items: center; padding: 6px 16px;
+    border-bottom: 1px solid var(--border2); flex-shrink: 0;
+  }
+  .ch { font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ct-body { flex: 1; overflow-y: auto; min-height: 0; }
+  .ct-row {
+    display: flex; align-items: center; padding: 7px 16px;
+    border-bottom: 1px solid var(--border); cursor: pointer; outline: none;
+    transition: background 0.1s;
+  }
+  .ct-row:hover { background: var(--surface2); }
+  .ct-row.selected { background: var(--accent-bg); }
+  .ct-row.selected .cd { color: var(--text); }
+  .cd { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cd.patched { color: var(--accent); }
+  .mono { font-family: 'DM Mono', monospace; font-size: 10px; }
+  .flex1 { flex: 1; min-width: 0; padding-right: 8px; }
+  .flex3 { flex: 3; min-width: 0; padding-right: 8px; }
+  .swatch-col { width: 40px; flex-shrink: 0; display: flex; justify-content: center; }
+  .sw { width: 24px; height: 12px; border-radius: 2px; border: 1px solid rgba(255,255,255,0.08); display: inline-block; }
+  .ct-hint { padding: 5px 16px; font-size: 10px; color: var(--text-faint); border-top: 1px solid var(--border); flex-shrink: 0; }
 </style>
