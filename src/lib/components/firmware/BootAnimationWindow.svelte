@@ -50,12 +50,101 @@
     { idx: 44,  w: 480, h: 222 },
   ];
 
-  const CONTENT_X = 202;
-  const CONTENT_Y = 73;
-  const CONTENT_W = 76;
-  const CONTENT_H = 76;
+  const ZONES = [
+    { id: 'center76',  label: 'true center 76×76',       x: 202, y: 73, w: 76,  h: 76  },
+    { id: 'tl149sq',   label: 'safe square 149×149', x: 0,   y: 0,  w: 149, h: 149 },
+    { id: 'tl294rect', label: 'full safe 294×149',  x: 0,   y: 0,  w: 294, h: 149 },
+    { id: 'centered108', label: 'mirrored safe 108×149', x: 186, y: 0,  w: 108, h: 149 },
+  ];
+  let selectedZoneId = $state('center76');
+  const zone = $derived(ZONES.find(z => z.id === selectedZoneId) ?? ZONES[0]);
 
-  type Mode = 'gif' | 'video' | 'images';
+  // ── Placement within zone ──
+  let contentOffsetX = $state(0);
+  let contentOffsetY = $state(0);
+  let contentW = $state(76);
+  let contentH = $state(76);
+  let srcAspect = $state(1);
+  let stretchMode = $state(false);
+
+  // Drag state — plain vars, no reactivity needed
+  let dragActive = false;
+  let dragStart = { mx: 0, my: 0, ox: 0, oy: 0 };
+  let editorEl: HTMLDivElement | null = null;
+
+  const EDITOR_MAX_W = 226;
+  const EDITOR_PAD = 3; // padding inside placement-editor so borders never clip
+  const EDITOR_INNER = EDITOR_MAX_W - EDITOR_PAD * 2;
+  const editorScale = $derived(EDITOR_INNER / Math.max(zone.w, 1));
+  const editorPxH = $derived(Math.floor(zone.h * editorScale) + EDITOR_PAD * 2);
+  const editorInnerH = $derived(editorPxH - EDITOR_PAD * 2);
+  const contentPxL = $derived(EDITOR_PAD + Math.floor(contentOffsetX * editorScale));
+  const contentPxT = $derived(EDITOR_PAD + Math.floor(contentOffsetY * editorScale));
+  const contentPxW = $derived(Math.min(EDITOR_INNER - 1, Math.round(contentW * editorScale)));
+  const contentPxH = $derived(Math.min(editorInnerH - 1, Math.round(contentH * editorScale)));
+  let sizeSlider = $state(100);
+
+  function fitToZone() {
+    // Use only local vars — never read $state contentW/contentH inside this function
+    // because it is called from $effect and Svelte 5 tracks every $state read
+    let w: number, h: number;
+    if (stretchMode) {
+      w = zone.w; h = zone.h;
+    } else {
+      const za = zone.w / zone.h;
+      if (srcAspect >= za) { w = zone.w; h = Math.max(1, Math.round(zone.w / srcAspect)); }
+      else { h = zone.h; w = Math.max(1, Math.round(zone.h * srcAspect)); }
+    }
+    contentW = w;
+    contentH = h;
+    contentOffsetX = Math.round((zone.w - w) / 2);
+    contentOffsetY = Math.round((zone.h - h) / 2);
+    sizeSlider = Math.round(w / Math.max(zone.w, 1) * 100);
+  }
+
+  function clampPlacement() {
+    contentOffsetX = Math.max(0, Math.min(zone.w - contentW, contentOffsetX));
+    contentOffsetY = Math.max(0, Math.min(zone.h - contentH, contentOffsetY));
+  }
+
+  function initFromBitmap(bitmap: ImageBitmap) {
+    srcAspect = bitmap.width / bitmap.height;
+    fitToZone();
+  }
+
+  $effect(() => { zone.w; zone.h; stretchMode; fitToZone(); });
+
+  // ── Size slider ──
+  function setSize(pct: number) {
+    const nw = Math.max(8, Math.round(zone.w * pct / 100));
+    contentW = Math.min(zone.w - contentOffsetX, nw);
+    if (!stretchMode && srcAspect > 0) {
+      contentH = Math.max(8, Math.min(zone.h - contentOffsetY, Math.round(contentW / srcAspect)));
+    } else {
+      contentH = Math.max(8, Math.min(zone.h - contentOffsetY, Math.round(zone.h * pct / 100)));
+    }
+    clampPlacement();
+  }
+
+  // ── Drag to move (pointer capture on editor element) ──
+  function onEditorPointerDown(e: PointerEvent) {
+    e.preventDefault();
+    dragActive = true;
+    dragStart = { mx: e.clientX, my: e.clientY, ox: contentOffsetX, oy: contentOffsetY };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function onEditorPointerMove(e: PointerEvent) {
+    if (!dragActive) return;
+    const dx = (e.clientX - dragStart.mx) / editorScale;
+    const dy = (e.clientY - dragStart.my) / editorScale;
+    contentOffsetX = Math.max(0, Math.min(zone.w - contentW, Math.round(dragStart.ox + dx)));
+    contentOffsetY = Math.max(0, Math.min(zone.h - contentH, Math.round(dragStart.oy + dy)));
+  }
+
+  function onEditorPointerUp() { dragActive = false; }
+
+    type Mode = 'gif' | 'video' | 'images';
   let mode = $state<Mode>('gif');
   let bgColor = $state('#000000');
 
@@ -99,7 +188,7 @@
     const ctx = canvas.getContext('2d')!;
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, frameW, frameH);
-    ctx.drawImage(bitmap, CONTENT_X, CONTENT_Y, CONTENT_W, CONTENT_H);
+    ctx.drawImage(bitmap, zone.x + contentOffsetX, zone.y + contentOffsetY, contentW, contentH);
     return new Promise(resolve => {
       canvas.toBlob(blob => resolve(new File([blob!], 'frame.png', { type: 'image/png' })), 'image/png');
     });
@@ -120,7 +209,7 @@
       const tc = tmp.getContext('2d')!;
       tc.fillStyle = bgColor;
       tc.fillRect(0, 0, frame.w, frame.h);
-      tc.drawImage(bitmaps[i], CONTENT_X, CONTENT_Y, CONTENT_W, CONTENT_H);
+      tc.drawImage(bitmaps[i], zone.x + contentOffsetX, zone.y + contentOffsetY, contentW, contentH);
       // Overlay onto accumulated canvas at (0,0)
       ctx.drawImage(tmp, 0, 0);
       urls.push(accCanvas.toDataURL());
@@ -146,6 +235,11 @@
         progress = 20 + Math.round((i / 35) * 60);
       }
       sourceBitmaps = bitmaps;
+      if (bitmaps.length > 0) initFromBitmap(bitmaps[0]);
+      statusMsg = 'Generating preview…';
+      await buildPreview(bitmaps);
+      showPreview = true;
+      previewFrameIdx = 0;
       statusMsg = 'Done'; progress = 100;
     } catch (e) { error = `GIF decode failed: ${e instanceof Error ? e.message : String(e)}`; }
     finally { isProcessing = false; }
@@ -158,7 +252,13 @@
       const files = await extractFrames(file, 35, p => { progress = Math.round(p * 80); });
       const bitmaps: ImageBitmap[] = [];
       for (const f of files) { bitmaps.push(await createImageBitmap(f)); progress = 80 + Math.round((bitmaps.length/35)*20); }
-      sourceBitmaps = bitmaps; statusMsg = 'Done'; progress = 100;
+      sourceBitmaps = bitmaps;
+      if (bitmaps.length > 0) initFromBitmap(bitmaps[0]);
+      statusMsg = 'Generating preview…';
+      await buildPreview(bitmaps);
+      showPreview = true;
+      previewFrameIdx = 0;
+      statusMsg = 'Done'; progress = 100;
     } catch (e) { error = `Video extract failed: ${e instanceof Error ? e.message : String(e)}`; }
     finally { isProcessing = false; }
   }
@@ -175,6 +275,11 @@
       } catch {}
     }
     imageSlots = [...imageSlots, ...newSlots].slice(0, 35);
+    if (newSlots.length > 0 && imageSlots.length === newSlots.length) initFromBitmap(newSlots[0].bitmap);
+    const previewBitmaps = imageSlots.map(s => s.bitmap);
+    await buildPreview(previewBitmaps);
+    showPreview = true;
+    previewFrameIdx = 0;
     if (imageSlots.length > 35) error = 'Max 35 images. Extra files were ignored.';
     else error = '';
   }
@@ -225,9 +330,9 @@
     imageSlots = []; sourceBitmaps = []; previewCanvases = []; error = ''; statusMsg = '';
   }
 
-  // Rebuild preview when bgColor changes
+  // Rebuild preview when bgColor or zone changes
   $effect(() => {
-    bgColor;
+    bgColor; selectedZoneId;
     const bitmaps = mode === 'images' ? imageSlots.map(s => s.bitmap) : sourceBitmaps;
     if (bitmaps.length > 0 && showPreview) buildPreview(bitmaps);
   });
@@ -342,7 +447,7 @@
             <input class="bg-swatch" type="color" bind:value={bgColor} />
             <input class="bg-hex" type="text" bind:value={bgColor} maxlength="7" spellcheck="false" placeholder="#000000" />
           </div>
-          <div class="cn">fills areas outside the 76×76 content zone in each frame</div>
+          <div class="cn">fills areas outside the content zone in each frame</div>
         </div>
 
         <!-- Drop zone (for gif/video, or add more for images) -->
@@ -402,7 +507,7 @@
         <div class="cg">
           <div class="action-row">
             <button class="abtn abtn-preview" onclick={togglePreview} disabled={!canPreview}>
-              <i class="fa-solid fa-eye"></i> {showPreview ? 'hide preview' : 'preview'}
+              <i class="fa-solid fa-eye"></i> {showPreview ? 'hide' : 'preview'}
             </button>
             <button class="abtn abtn-apply" onclick={apply} disabled={!canApply}>
               <i class="fa-solid fa-floppy-disk"></i> apply
@@ -414,8 +519,8 @@
         </div>
       </div>
 
-      <!-- Right: preview panel -->
-      <div class="baw-right">
+      <!-- Center: preview panel -->
+      <div class="baw-center">
         <div class="preview-head">
           <span class="cl">device preview</span>
           {#if showPreview && previewCanvases.length > 0}
@@ -434,9 +539,7 @@
           {#if showPreview && previewCanvases.length > 0}
             <div class="preview-device">
               <img class="preview-frame" src={previewCanvases[previewFrameIdx]} alt="frame preview" />
-              <div class="preview-zone-hint">
-                <div class="zone-box" style="left:{CONTENT_X}px;top:{CONTENT_Y}px;width:{CONTENT_W}px;height:{CONTENT_H}px;"></div>
-              </div>
+
             </div>
             <div class="preview-note">accumulated render — frame 0010 as base, each subsequent frame overlaid at (0,0)</div>
           {:else if showPreview}
@@ -447,6 +550,62 @@
               <span>click preview to see device-accurate render</span>
             </div>
           {/if}
+        </div>
+      </div>
+
+      <!-- Right: zone + placement -->
+      <div class="baw-right">
+        <div class="baw-right-head">
+          <span class="cl">content zone</span>
+        </div>
+        <div class="baw-right-body">
+          <div class="cg">
+            <div class="cl-sub">zone preset</div>
+            <div class="zone-tabs">
+              {#each ZONES as z}
+                <button class="zone-tab" class:active={selectedZoneId === z.id}
+                  onclick={() => { selectedZoneId = z.id; }}>
+                  {z.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+
+          <div class="cg">
+            <div class="cl-sub">
+              placement
+              <label class="stretch-toggle">
+                <input type="checkbox" bind:checked={stretchMode} />
+                stretch
+              </label>
+            </div>
+            <div class="placement-editor"
+              style="width:226px;height:{editorPxH}px;">
+              <div class="pe-content"
+                style="left:{contentPxL}px;top:{contentPxT}px;width:{contentPxW}px;height:{contentPxH}px;"
+                onpointerdown={onEditorPointerDown}
+                onpointermove={onEditorPointerMove}
+                onpointerup={onEditorPointerUp}
+                onpointercancel={onEditorPointerUp}>
+              </div>
+
+            </div>
+            <div class="resize-sliders">
+              <div class="rs-group">
+                <div class="rs-header">
+                  <span class="rs-label">size</span>
+                  <span class="rs-val">{sizeSlider}%</span>
+                </div>
+                <input class="rs-range" type="range" min="5" max="100"
+                  value={sizeSlider}
+                  oninput={(e) => { const v = +(e.target as HTMLInputElement).value; sizeSlider = v; setSize(v); }} />
+              </div>
+            </div>
+            <div class="cn">
+              offset ({contentOffsetX},{contentOffsetY}) · {contentW}×{contentH}px
+              <button class="cn-reset" onclick={fitToZone}>reset</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -465,7 +624,7 @@
   }
   .baw {
     background: var(--bg); border: 1px solid var(--border2);
-    border-radius: 5px; width: 100%; max-width: 960px; max-height: 88vh;
+    border-radius: 5px; width: 100%; max-width: 1100px; max-height: 88vh;
     display: flex; flex-direction: column; overflow: hidden;
   }
 
@@ -477,7 +636,7 @@
   .baw-close { background: none; border: none; color: var(--text-faint); cursor: pointer; font-size: 12px; transition: color 0.15s; }
   .baw-close:hover { color: var(--text); }
 
-  .baw-body { display: grid; grid-template-columns: 300px 1fr; overflow: hidden; flex: 1; min-height: 0; }
+  .baw-body { display: grid; grid-template-columns: 220px 1fr 260px; overflow: hidden; flex: 1; min-height: 0; }
 
   /* Left */
   .baw-left {
@@ -492,8 +651,47 @@
   .cn-inline { font-size: 9px; color: var(--text-faint); text-transform: none; letter-spacing: 0; font-weight: 400; }
   .cn-warn { font-size: 10px; color: #a07040; display: flex; align-items: flex-start; gap: 5px; }
 
-  /* Mode tabs */
-  .mode-tabs { display: flex; border-bottom: 1px solid var(--border); }
+  /* Placement editor */
+  .placement-editor {
+    position: relative; background: var(--surface); border: 1px solid var(--border2);
+    border-radius: 3px; overflow: hidden; box-sizing: border-box;
+  }
+  .pe-content {
+    position: absolute;
+    box-shadow: inset 0 0 0 1px var(--accent);
+    background: rgba(155,111,212,0.15); cursor: move;
+    box-sizing: border-box;
+  }
+
+  .resize-sliders { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+  .rs-row { display: flex; align-items: center; gap: 6px; }
+  .rs-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-faint); width: 10px; flex-shrink: 0; }
+  .rs-range { width: 100%; display: block; -webkit-appearance: none; appearance: none; height: 2px; background: var(--border2); outline: none; cursor: pointer; border-radius: 1px; }
+  .rs-range::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); cursor: pointer; }
+  .rs-val { font-size: 10px; color: var(--text-faint); font-family: "DM Mono", monospace; width: 24px; text-align: right; flex-shrink: 0; }
+
+  .stretch-toggle {
+    display: flex; align-items: center; gap: 5px;
+    font-size: 10px; color: var(--text-faint); cursor: pointer;
+    text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: auto;
+  }
+  .stretch-toggle input { cursor: pointer; accent-color: var(--accent); }
+  .cn-reset {
+    background: none; border: none; font-family: 'DM Mono', monospace;
+    font-size: 10px; color: var(--accent); cursor: pointer; padding: 0;
+    margin-left: 6px; opacity: 0.8; transition: opacity 0.15s;
+  }
+  .cn-reset:hover { opacity: 1; }
+
+  .zone-tabs { display: flex; flex-direction: column; gap: 2px; }
+  .zone-tab {
+    background: none; border: none; border-bottom: 1px solid var(--border);
+    padding: 5px 0; font-family: 'DM Mono', monospace; font-size: 11px;
+    color: var(--text-dim); cursor: pointer; text-align: left;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .zone-tab:hover { color: var(--text); }
+  .zone-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .mode-tab {
     flex: 1; background: none; border: none; border-bottom: 2px solid transparent;
     padding: 5px 0; font-family: 'DM Mono', monospace; font-size: 11px;
@@ -564,8 +762,14 @@
   .abtn-apply { color: var(--accent); border-bottom-color: var(--accent); }
   .abtn-apply:hover:not(:disabled) { opacity: 0.7; }
 
-  /* Right preview */
-  .baw-right { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+  /* Center preview */
+  .baw-center { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+
+  /* Right: zone + placement */
+  .baw-right { border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+  .baw-right-head { padding: 10px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .baw-right-body { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+  .cl-sub { font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
   .preview-head {
     display: flex; align-items: center; justify-content: space-between;
     padding: 10px 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; gap: 12px;
@@ -577,16 +781,10 @@
   .frame-scrub { -webkit-appearance: none; appearance: none; width: 120px; height: 2px; background: var(--border2); outline: none; cursor: pointer; border-radius: 1px; }
   .frame-scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); cursor: pointer; }
 
-  .preview-body { flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; gap: 10px; min-height: 0; }
-  .preview-device { position: relative; display: inline-block; line-height: 0; }
-  .preview-frame { max-width: 100%; max-height: calc(100% - 40px); border: 1px solid var(--border); border-radius: 3px; image-rendering: pixelated; }
-  .preview-zone-hint { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-  .zone-box {
-    position: absolute;
-    border: 1px solid rgba(155,111,212,0.5);
-    box-shadow: 0 0 0 1px rgba(155,111,212,0.2);
-    pointer-events: none;
-  }
+  .preview-body { flex: 1; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 12px; gap: 10px; min-height: 0; }
+  .preview-device { position: relative; display: block; line-height: 0; width: 100%; }
+  .preview-frame { width: 100%; height: auto; border: 1px solid var(--border); border-radius: 3px; image-rendering: pixelated; display: block; }
+
   .preview-note { font-size: 10px; color: var(--text-faint); text-align: center; }
   .preview-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; color: var(--text-faint); font-size: 12px; }
   .preview-empty i { font-size: 22px; opacity: 0.3; }
