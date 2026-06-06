@@ -12,6 +12,11 @@ node_modules
 .DS_Store
 Thumbs.db
 
+# Editor / AI tools
+.vscode/
+.gemini/
+.idea/
+
 # Env
 .env
 .env.*

@@ -1183,6 +1183,29 @@ export class FirmwareState {
     }
   }
 
+  loadFirmwareFromBuffer(firmwareData: Uint8Array, filename: string) {
+    this.isProcessing = true;
+    this.progress = 10;
+    this.statusMessage = `Loading ${filename}...`;
+    this.loadedFileName = filename.replace(/\.(img|bin)$/i, '');
+
+    this.originalFirmwareData = new Uint8Array(firmwareData);
+    this.replacedImages = [];
+    this.replacedSmallFontCharacters = new Set();
+    this.replacedLargeFontCharacters = new Set();
+
+    this.progress = 30;
+    this.statusMessage = "Analyzing firmware...";
+
+    this.worker!.postMessage({
+      type: "analyze",
+      id: "analyze",
+      firmware: firmwareData,
+    });
+
+    this.progress = 100;
+  }
+
   showWarningDialog(title: string, message: string) {
     this.warningTitle = title;
     this.warningMessage = message;

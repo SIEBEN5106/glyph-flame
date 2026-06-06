@@ -4,6 +4,7 @@
   import FontGridRenderer from "$lib/components/firmware/FontGridRenderer.svelte";
   import SequenceReplacerWindow from "$lib/components/firmware/SequenceReplacerWindow.svelte";
   import BootAnimationWindow from "$lib/components/firmware/BootAnimationWindow.svelte";
+  import ThemeMover from "$lib/components/firmware/ThemeMover.svelte";
   import ColorTable from "$lib/components/firmware/ColorTable.svelte";
   import ColorDetailWindow from "$lib/components/firmware/ColorDetailWindow.svelte";
   import { initDebugShortcut } from "$lib/stores";
@@ -18,6 +19,8 @@
   } from "$lib/components/98css";
   import { FirmwareState } from "$lib/rse/firmware-state.svelte";
 
+  const APP_VERSION = 'v2.1';
+
   const fwState = new FirmwareState();
 
   let showSequenceReplacer = $state(false);
@@ -30,6 +33,8 @@
   let showInstallModal = $state(false);
   let showBootAnimModal = $state(false);
   let showAboutModal = $state(false);
+  let showThemeMover = $state(false);
+  let showOpenConfirm = $state(false);
 
   const THEMES = [
     { id: 'reign',       label: 'reign' },
@@ -67,8 +72,14 @@
     initDebugShortcut();
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("paste", handlePaste);
+    window.addEventListener("beforeunload", handleBeforeUnload);
     const cleanup = fwState.init();
-    return () => { cleanup(); window.removeEventListener("keydown", handleKeyDown); window.removeEventListener("paste", handlePaste); };
+    return () => {
+      cleanup();
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("paste", handlePaste);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
   });
 
   $effect(() => {
@@ -77,6 +88,14 @@
 
   function handleKeyDown(e: KeyboardEvent) {
     if (e.ctrlKey && e.key === "s") { e.preventDefault(); fwState.exportFirmware(); }
+  }
+
+  function handleBeforeUnload(e: BeforeUnloadEvent) {
+    const hasWork = fwState.originalFirmwareData &&
+      (fwState.replacedImages.length > 0 ||
+       fwState.replacedSmallFontCharacters.size > 0 ||
+       fwState.replacedLargeFontCharacters.size > 0);
+    if (hasWork) { e.preventDefault(); }
   }
 
   async function handlePaste(e: ClipboardEvent) {
@@ -172,18 +191,40 @@
   <LoadingWindow title={fwState.loadingTitle} message={fwState.statusMessage} progress={fwState.progress} />
 {/if}
 
-<!-- drop screen -->
+<!-- landing screen -->
 {#if !fwState.originalFirmwareData && !fwState.isProcessing}
-  <div class="drop-screen" class:active={isDragOver}
-    ondragover={handleDragOver} ondragleave={handleDragLeave} ondrop={handleDrop}
-    onclick={() => fileInput?.click()}
-    onkeydown={(e) => (e.key === "Enter" || e.key === " ") && fileInput?.click()}
-    role="button" tabindex="0">
-    <div class="drop-card">
-      <div class="drop-logo">oflame<span class="drop-dot">.</span>reign</div>
-      <p class="drop-sub">firmware image editor for snowsky echo &amp; echo mini</p>
-      <div class="drop-divider"></div>
-      <div class="drop-hint">drop <code>.img</code> firmware here or click to browse</div>
+  <div class="landing" class:drag-active={isDragOver}
+    ondragover={handleDragOver} ondragleave={handleDragLeave} ondrop={handleDrop}>
+    <div class="landing-inner">
+      <button class="landing-brand" onclick={cycleTheme} title="cycle theme → {currentTheme.label}">
+        oflame<span class="landing-dot">.</span>reign
+      </button>
+      <p class="landing-sub">firmware image editor for snowsky echo &amp; echo mini</p>
+      <div class="landing-divider"></div>
+      <div class="landing-cards">
+        <button class="lcard" onclick={() => fileInput?.click()}>
+          <div class="lcard-icon"><i class="fa-solid fa-pen-to-square"></i></div>
+          <div class="lcard-title">customize firmware</div>
+          <div class="lcard-desc">open a <code>.img</code> file and edit images, fonts, and colors</div>
+        </button>
+        <button class="lcard" onclick={() => (showThemeMover = true)}>
+          <div class="lcard-icon"><i class="fa-solid fa-palette"></i></div>
+          <div class="lcard-title">theme mover</div>
+          <div class="lcard-desc">copy a theme from one firmware to another</div>
+        </button>
+      </div>
+      {#if isDragOver}
+        <div class="landing-drop-hint">drop to load firmware</div>
+      {/if}
+    </div>
+    <div class="landing-footer">
+      <div class="lf-sites">
+        <button class="lf-link" onclick={() => window.open('https://spark.reign.fyi', '_blank', 'noopener')} title="spark — theme maker">spark.reign.fyi</button>
+        <span class="lf-sep">·</span>
+        <button class="lf-link" onclick={() => window.open('https://oflame.reign.fyi', '_blank', 'noopener')} title="oflame — firmware image editor">oflame.reign.fyi</button>
+      </div>
+      <button class="lf-link lf-kofi" onclick={() => window.open('https://ko-fi.com/U7U41U5JQ', '_blank', 'noopener')}>support on ko-fi ♥</button>
+      <div class="lf-version">{APP_VERSION}</div>
     </div>
   </div>
 {/if}
@@ -320,9 +361,7 @@
 
       <!-- col 3: tools -->
       <aside class="col col-tools">
-        <div class="col-label">tools</div>
-
-        <div class="tg">
+        <div class="tg" style="padding-top:16px">
           <div class="tg-label">selected</div>
           <div class="tg-filename">{fwState.imageData?.name ?? fwState.selectedNode?.label ?? '—'}</div>
         </div>
@@ -332,6 +371,11 @@
           <button class="tbtn" onclick={() => editFileInput?.click()} disabled={fwState.isProcessing}>
             <i class="fa-solid fa-upload"></i> {importLabel}
           </button>
+          <div class="import-drop" class:drag-over={isImageDragOver}
+            ondragover={handleImageDragOver} ondragleave={handleImageDragLeave} ondrop={handleImageDrop}
+            role="presentation">
+            drop image / font here
+          </div>
           <button class="tbtn" onclick={exportCurrentImage} disabled={!canExportImage}>
             <i class="fa-solid fa-download"></i> export image
           </button>
@@ -341,10 +385,7 @@
         </div>
 
         <div class="tg">
-          <div class="tg-label">firmware</div>
-          <button class="tbtn tbtn-accent" onclick={() => fwState.exportFirmware()} disabled={fwState.isProcessing}>
-            <i class="fa-solid fa-floppy-disk"></i> download .img
-          </button>
+          <div class="tg-label">tools</div>
           <button class="tbtn" onclick={() => (showSequenceReplacer = true)} disabled={fwState.imageList.length === 0}>
             <i class="fa-solid fa-arrows-rotate"></i> sequence replacer
           </button>
@@ -353,17 +394,21 @@
           </button>
         </div>
 
+        <div class="tg tg-save">
+          <div class="tg-label">save</div>
+          <button class="tbtn tbtn-accent tbtn-save" onclick={() => fwState.exportFirmware()} disabled={fwState.isProcessing}>
+            <i class="fa-solid fa-floppy-disk"></i> download .img
+          </button>
+        </div>
+
         <div class="tg tg-footer">
-          <button class="tbtn" onclick={() => fileInput?.click()}>
+          <button class="tbtn" onclick={() => (showOpenConfirm = true)}>
             <i class="fa-solid fa-folder-open"></i> open firmware
           </button>
-          <div class="tg-row2">
-            <button class="tbtn tbtn-sm" onclick={() => (showInstallModal = true)}>
-              <i class="fa-solid fa-list-check"></i> guide
-            </button>
-            <button class="tbtn tbtn-sm" onclick={() => (showAboutModal = true)}>
-              <i class="fa-solid fa-circle-info"></i> about
-            </button>
+          <div class="tg-meta">
+            <button class="meta-link" onclick={() => (showInstallModal = true)}>guide</button>
+            <span class="meta-sep">·</span>
+            <button class="meta-link" onclick={() => (showAboutModal = true)}>about</button>
           </div>
         </div>
       </aside>
@@ -414,7 +459,7 @@
     <div class="modal">
       <div class="modal-head">about oflame</div>
       <div class="modal-body">
-        <div class="ab-title">oflame<span class="ab-ver">v2.0</span></div>
+        <div class="ab-title">oflame<span class="ab-ver">{APP_VERSION}</span></div>
         <p class="ab-desc">firmware image editor for snowsky echo and echo mini. fork of flameocean with echo (non-mini) support and a redesigned ui.</p>
         <div class="ab-links">
           <a class="ab-link" href="https://github.com/unitreign/ocean-flame" target="_blank" rel="noopener">
@@ -502,23 +547,85 @@
   </div>
 {/if}
 
+{#if showOpenConfirm}
+  <div class="modal-back" onclick={(e) => e.target === e.currentTarget && (showOpenConfirm = false)}>
+    <div class="modal">
+      <div class="modal-head">open firmware</div>
+      <div class="modal-body">
+        <p class="confirm-msg">Opening a new firmware will discard all unsaved changes
+          {#if fwState.replacedImages.length > 0}
+            — including <strong class="confirm-count">{fwState.replacedImages.length} replaced image{fwState.replacedImages.length !== 1 ? 's' : ''}</strong>
+          {/if}.
+          Download the current <code>.img</code> first if you want to keep your work.
+        </p>
+      </div>
+      <div class="modal-foot">
+        <button class="mbtn" onclick={() => (showOpenConfirm = false)}>cancel</button>
+        <button class="mbtn mbtn-danger" onclick={() => { showOpenConfirm = false; fileInput?.click(); }}>discard &amp; open</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showThemeMover}
+  <ThemeMover
+    onComplete={(data, name) => { showThemeMover = false; fwState.loadFirmwareFromBuffer(data, name); }}
+    onClose={() => (showThemeMover = false)}
+  />
+{/if}
+
 <style>
-  /* ── drop screen ── */
-  .drop-screen {
-    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: var(--bg); cursor: pointer; outline: none;
+  /* ── landing screen ── */
+  .landing {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: var(--bg);
   }
-  .drop-card {
-    border: 1px solid var(--border); border-radius: 5px; padding: 40px 56px;
-    max-width: 420px; width: 100%; transition: border-color 0.2s;
+  .landing.drag-active .landing-inner { border-color: var(--accent); }
+  .landing-inner {
+    border: 1px solid var(--border); border-radius: 5px; padding: 40px 48px;
+    max-width: 520px; width: 100%; transition: border-color 0.2s; position: relative;
   }
-  .drop-screen:hover .drop-card, .drop-screen.active .drop-card { border-color: var(--accent); }
-  .drop-logo { font-size: 22px; font-weight: 500; color: var(--text); margin-bottom: 8px; letter-spacing: -0.3px; }
-  .drop-dot { color: var(--accent); }
-  .drop-sub { font-size: 11px; color: var(--text-dim); margin-bottom: 20px; line-height: 1.6; }
-  .drop-divider { height: 1px; background: var(--border); margin-bottom: 20px; }
-  .drop-hint { font-size: 12px; color: var(--text-dim); }
-  .drop-hint code { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text); background: var(--surface2); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); }
+  .landing-brand {
+    background: none; border: none; cursor: pointer; padding: 0;
+    font-family: 'DM Mono', monospace; font-size: 22px; font-weight: 500;
+    color: var(--text); letter-spacing: -0.3px; transition: color 0.2s; display: block;
+    margin-bottom: 8px;
+  }
+  .landing-brand:hover { color: var(--accent); }
+  .landing-dot { color: var(--accent); }
+  .landing-sub { font-size: 11px; color: var(--text-dim); margin-bottom: 20px; line-height: 1.6; }
+  .landing-divider { height: 1px; background: var(--border); margin-bottom: 20px; }
+  .landing-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .lcard {
+    border: 1px solid var(--border); border-radius: 4px; padding: 20px 16px;
+    background: none; cursor: pointer; text-align: left;
+    display: flex; flex-direction: column; gap: 8px;
+    font-family: 'DM Mono', monospace; transition: border-color 0.2s, background 0.15s;
+  }
+  .lcard:hover { border-color: var(--accent); background: var(--accent-bg); }
+  .lcard-icon { font-size: 16px; color: var(--accent); opacity: 0.7; }
+  .lcard-title { font-size: 13px; color: var(--text); font-weight: 500; }
+  .lcard-desc { font-size: 11px; color: var(--text-dim); line-height: 1.55; }
+  .lcard-desc code { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text); background: var(--surface2); padding: 1px 4px; border-radius: 3px; border: 1px solid var(--border); }
+  .landing-drop-hint {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.5); border-radius: 5px;
+    font-size: 14px; color: var(--accent); letter-spacing: 0.5px;
+  }
+  .landing-footer {
+    margin-top: 20px; display: flex; flex-direction: column;
+    align-items: center; gap: 5px;
+  }
+  .lf-sites { display: flex; align-items: center; gap: 7px; }
+  .lf-link {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font-family: 'DM Mono', monospace; font-size: 11px;
+    color: var(--text-faint); transition: color 0.15s;
+  }
+  .lf-link:hover { color: var(--accent); }
+  .lf-sep { font-size: 10px; color: var(--text-faint); }
+  .lf-version { font-size: 10px; color: var(--text-faint); letter-spacing: 0.5px; margin-top: 1px; }
 
   /* ── app ── */
   .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -677,13 +784,21 @@
   /* ── tools col ── */
   .tg { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
   .tg-footer { border-bottom: none; }
+  .tg-save { border-top: 1px solid var(--border2); margin-top: auto; }
   .tg-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-dim); margin-bottom: 3px; }
   .tg-filename {
     font-size: 11px; color: var(--text-dim); padding: 5px 0;
     border-bottom: 1px solid var(--border); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
   }
-  .tg-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .tg-meta { display: flex; align-items: center; gap: 6px; padding-top: 2px; }
+  .meta-link {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-faint);
+    transition: color 0.15s;
+  }
+  .meta-link:hover { color: var(--text-dim); }
+  .meta-sep { color: var(--text-faint); font-size: 10px; }
 
   .tbtn {
     display: flex; align-items: center; gap: 8px; padding: 7px 0;
@@ -700,6 +815,17 @@
   .tbtn-accent:hover:not(:disabled) { opacity: 1; }
   .tbtn-sm { font-size: 11px; justify-content: center; border: 1px solid var(--border); border-radius: 3px; padding: 5px 8px; }
   .tbtn-sm:hover:not(:disabled) { border-color: var(--text-dim); }
+  .tbtn-save { font-size: 13px; padding: 10px 0; letter-spacing: 0.2px; }
+
+  .import-drop {
+    border: 1px dashed var(--border); border-radius: 3px; padding: 8px 10px;
+    font-size: 11px; color: var(--text-faint); text-align: center;
+    transition: border-color 0.2s, color 0.2s, background 0.2s;
+    cursor: default; user-select: none;
+  }
+  .import-drop.drag-over {
+    border-color: var(--accent); color: var(--accent); background: var(--accent-bg);
+  }
 
   /* ── modals ── */
   .modal-back {
@@ -727,6 +853,10 @@
     padding: 3px 0; cursor: pointer; transition: opacity 0.15s;
   }
   .mbtn:hover { opacity: 0.7; }
+  .mbtn-danger { color: var(--danger); border-bottom-color: var(--danger); }
+  .confirm-msg { font-size: 12px; color: var(--text-dim); line-height: 1.65; }
+  .confirm-msg code { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text); background: var(--surface2); padding: 1px 4px; border-radius: 3px; border: 1px solid var(--border); }
+  .confirm-count { color: var(--accent); font-weight: 500; }
 
   /* install guide */
   .modal-devices { display: flex; gap: 10px; flex-wrap: wrap; }
