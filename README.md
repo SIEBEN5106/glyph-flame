@@ -85,7 +85,7 @@ Provided as-is. No support, troubleshooting, or compensation for bricked devices
 
 ## Credits
 
-Forked from [FlameOcean](https://github.com/unitreign/ocean-flame) by [unitreign](https://github.com/unitreign).
+Forked from [OceanFlame](https://github.com/unitreign/ocean-flame) by [unitreign](https://github.com/unitreign).
 
 
 
