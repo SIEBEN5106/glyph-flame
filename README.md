@@ -102,3 +102,9 @@ bun run dev
 ```bash
 bun run build
 ```
+
+
+## ToDo
+* Write detailed instructions on how to use this tool.
+
+
