@@ -4,7 +4,6 @@
   import FontGridRenderer from "$lib/components/firmware/FontGridRenderer.svelte";
   import SequenceReplacerWindow from "$lib/components/firmware/SequenceReplacerWindow.svelte";
   import BootAnimationWindow from "$lib/components/firmware/BootAnimationWindow.svelte";
-  import ThemeMover from "$lib/components/firmware/ThemeMover.svelte";
   import ColorTable from "$lib/components/firmware/ColorTable.svelte";
   import ColorDetailWindow from "$lib/components/firmware/ColorDetailWindow.svelte";
   import { initDebugShortcut } from "$lib/stores";
@@ -19,8 +18,6 @@
   } from "$lib/components/98css";
   import { FirmwareState } from "$lib/rse/firmware-state.svelte";
 
-  const APP_VERSION = 'v2.1';
-
   const fwState = new FirmwareState();
 
   let showSequenceReplacer = $state(false);
@@ -33,8 +30,6 @@
   let showInstallModal = $state(false);
   let showBootAnimModal = $state(false);
   let showAboutModal = $state(false);
-  let showThemeMover = $state(false);
-  let showOpenConfirm = $state(false);
 
   const THEMES = [
     { id: 'reign',       label: 'reign' },
@@ -72,30 +67,23 @@
     initDebugShortcut();
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("paste", handlePaste);
-    window.addEventListener("beforeunload", handleBeforeUnload);
     const cleanup = fwState.init();
-    return () => {
-      cleanup();
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("paste", handlePaste);
-      window.removeEventListener("beforeunload", handleBeforeUnload);
+    return () => { 
+      cleanup(); 
+      window.removeEventListener("keydown", handleKeyDown); 
+      window.removeEventListener("paste", handlePaste); 
     };
   });
 
   $effect(() => {
-    document.title = fwState.originalFirmwareData ? `${fwState.loadedFileName} — oflame.reign` : "oflame.reign";
+    document.title = fwState.originalFirmwareData ? `${fwState.loadedFileName} — GlyphFlame` : "GlyphFlame";
   });
 
   function handleKeyDown(e: KeyboardEvent) {
-    if (e.ctrlKey && e.key === "s") { e.preventDefault(); fwState.exportFirmware(); }
-  }
-
-  function handleBeforeUnload(e: BeforeUnloadEvent) {
-    const hasWork = fwState.originalFirmwareData &&
-      (fwState.replacedImages.length > 0 ||
-       fwState.replacedSmallFontCharacters.size > 0 ||
-       fwState.replacedLargeFontCharacters.size > 0);
-    if (hasWork) { e.preventDefault(); }
+    if (e.ctrlKey && e.key === "s") { 
+      e.preventDefault(); 
+      fwState.exportFirmware(); 
+    }
   }
 
   async function handlePaste(e: ClipboardEvent) {
@@ -103,7 +91,10 @@
     const files: File[] = [];
     const items = e.clipboardData?.items;
     if (!items) return;
-    for (let i = 0; i < items.length; i++) { const f = items[i].getAsFile(); if (f) files.push(f); }
+    for (let i = 0; i < items.length; i++) { 
+      const f = items[i].getAsFile(); 
+      if (f) files.push(f); 
+    }
     if (!files.length) return;
     const fonts = files.filter(f => fwState.isFontFile(f));
     if (fonts.length) { await fwState.replaceFont(fonts[0]); return; }
@@ -123,42 +114,138 @@
   async function handleEditFileSelect(e: Event) {
     const files = Array.from((e.target as HTMLInputElement).files ?? []);
     if (!files.length) return;
+
+    // BDFファイルがあれば優先処理
+    const bdfFiles = files.filter(f => f.name.toLowerCase().endsWith('.bdf'));
+    if (bdfFiles.length > 0) {
+        for (const bdfFile of bdfFiles) {
+            const result = await fwState.importBDF(bdfFile);
+            alert(`BDFインポート完了: ${result.imported}文字更新 / ${result.skipped}文字スキップ`);
+        }
+        return;
+    }
+
+    // 既存の処理（フォント・画像）
     const fonts = files.filter(f => fwState.isFontFile(f));
     if (fonts.length) await fwState.replaceFont(fonts[0]);
     else if (files.length === 1 && fwState.selectedNode?.type === "image" && fwState.imageData)
-      await fwState.replaceCurrentlySelectedImage(files[0]);
+        await fwState.replaceCurrentlySelectedImage(files[0]);
     else await fwState.handlePasteFiles(files);
-    (e.target as HTMLInputElement).value = "";
-  }
 
-  function handleDragOver(e: DragEvent) { e.preventDefault(); isDragOver = true; }
+    (e.target as HTMLInputElement).value = "";
+}
+
+  function handleDragOver(e: DragEvent) {
+    e.preventDefault();
+    isDragOver = true;
+}
   function handleDragLeave(e: DragEvent) { e.preventDefault(); isDragOver = false; }
   async function handleDrop(e: DragEvent) {
     e.preventDefault(); isDragOver = false;
-    const f = e.dataTransfer?.files[0]; if (f) fwState.loadFirmware(f);
+    const f = e.dataTransfer?.files[0]; 
+    if (f) fwState.loadFirmware(f);
   }
-  function handleImageDragOver(e: DragEvent) { e.preventDefault(); if (e.dataTransfer?.types.includes("Files")) isImageDragOver = true; }
-  function handleImageDragLeave(e: DragEvent) { e.preventDefault(); isImageDragOver = false; }
+    function handleImageDragOver(e: DragEvent) {
+    e.preventDefault();
+    if (e.dataTransfer?.types.includes("Files")) {
+      isImageDragOver = true;
+    }
+  }
+
+  function handleImageDragLeave(e: DragEvent) {
+    e.preventDefault();
+    isImageDragOver = false;
+  }
+    // ====================== 画像エリアへのドラッグ&ドロップ ======================
   async function handleImageDrop(e: DragEvent) {
-    e.preventDefault(); isImageDragOver = false;
-    if (!fwState.originalFirmwareData) return;
-    const files = Array.from(e.dataTransfer?.files ?? []);
-    if (!files.length) return;
-    const fonts = files.filter(f => fwState.isFontFile(f));
-    if (fonts.length) { await fwState.replaceFont(fonts[0]); return; }
-    if (files.length === 1 && fwState.selectedNode?.type === "image" && fwState.imageData)
-      await fwState.replaceCurrentlySelectedImage(files[0]);
-    else await fwState.handlePasteFiles(files);
+    e.preventDefault();
+    isImageDragOver = false;
+
+    if (!fwState.originalFirmwareData) {
+      console.warn("ファームウェアが読み込まれていません");
+      return;
+    }
+
+    const droppedFiles = Array.from(e.dataTransfer?.files ?? []);
+    if (droppedFiles.length === 0) return;
+
+    console.log(`📥 ドロップされたファイル: ${droppedFiles.length}個`);
+
+    // ---------------------- 1. BDFフォントファイル ----------------------
+    const bdfFiles = droppedFiles.filter(file => 
+      file.name.toLowerCase().endsWith('.bdf')
+    );
+
+    if (bdfFiles.length > 0) {
+      let totalImported = 0;
+      let totalSkipped = 0;
+      let totalProcessed = 0;
+
+      for (const bdfFile of bdfFiles) {
+        try {
+          console.log(`🔤 BDF処理開始: ${bdfFile.name}`);
+          const result = await fwState.importBDF(bdfFile);
+          
+          totalImported += result.imported;
+          totalSkipped += result.skipped;
+          totalProcessed += result.total;
+
+          console.log(`BDF ${bdfFile.name} → 更新:${result.imported} / スキップ:${result.skipped}`);
+        } catch (err: any) {
+          console.error(`BDF処理失敗 (${bdfFile.name}):`, err);
+          alert(`BDFファイルの処理に失敗しました:\n${bdfFile.name}\n\n${err.message || err}`);
+        }
+      }
+
+      if (totalProcessed > 0) {
+        alert(`✅ BDF Import Completed\n\n` +
+      `Files: ${bdfFiles.length}\n` +
+      `Total Glyphs: ${totalProcessed}\n` +
+      `Updated: ${totalImported}\n` +
+      `Skipped: ${totalSkipped}`);
+      }
+      return; // BDFを処理した場合はここで終了
+    }
+
+    // ---------------------- 2. 通常のフォントファイル (.fonなど) ----------------------
+    const fontFiles = droppedFiles.filter(f => fwState.isFontFile(f));
+    if (fontFiles.length > 0) {
+      console.log(`🔤 フォントファイル検出: ${fontFiles[0].name}`);
+      await fwState.replaceFont(fontFiles[0]);
+      return;
+    }
+
+    // ---------------------- 3. 画像ファイル ----------------------
+    const imageFiles = droppedFiles.filter(f => !fwState.isFontFile(f) && !f.name.toLowerCase().endsWith('.bdf'));
+
+    if (imageFiles.length === 1 && 
+        fwState.selectedNode?.type === "image" && 
+        fwState.imageData) {
+      // 現在選択中の画像1枚を置き換え
+      console.log(`🖼️ 画像置き換え: ${imageFiles[0].name}`);
+      await fwState.replaceCurrentlySelectedImage(imageFiles[0]);
+    } 
+    else if (imageFiles.length > 0) {
+      // 複数画像の一括処理
+      console.log(`🖼️ 画像一括処理: ${imageFiles.length}個`);
+      await fwState.handlePasteFiles(imageFiles);
+    } 
+    else {
+      console.warn("対応していないファイル形式です");
+    }
   }
 
   function exportCurrentImage() {
-    const img = fwState.imageData; if (!img) return;
+    const img = fwState.imageData; 
+    if (!img) return;
     const canvas = document.createElement("canvas");
-    canvas.width = img.width; canvas.height = img.height;
+    canvas.width = img.width; 
+    canvas.height = img.height;
     const ctx = canvas.getContext("2d")!;
     const id = ctx.createImageData(img.width, img.height);
     for (let i = 0; i < img.width * img.height; i++) {
-      const o = i * 2; const px = (img.rgb565Data[o] << 8) | img.rgb565Data[o + 1];
+      const o = i * 2; 
+      const px = (img.rgb565Data[o] << 8) | img.rgb565Data[o + 1];
       id.data[i*4]   = Math.round(((px>>11)&0x1f)*255/31);
       id.data[i*4+1] = Math.round(((px>>5) &0x3f)*255/63);
       id.data[i*4+2] = Math.round((px      &0x1f)*255/31);
@@ -171,7 +258,69 @@
     a.click();
   }
 
-  const importLabel = $derived(fwState.selectedNode?.type === "plane" ? "import font" : "import image");
+
+  // ==================== FontGridRenderer 用 追加 ====================
+async function handleFontUpdate(e: CustomEvent<{
+    unicode: number;
+    pixels: boolean[][];
+    fontType: 'SMALL' | 'LARGE';
+}>) {
+    const { unicode, pixels, fontType } = e.detail;
+    const success = await fwState.updateSingleFont(unicode, fontType, pixels);
+    
+    if (success && fwState.planeData) {
+        // 配列を完全に新しいものに置き換えてSvelteに通知
+        fwState.planeData.fonts = [...fwState.planeData.fonts];
+        
+        console.log(`✅ フォント更新 & 配列再作成: U+${unicode.toString(16).padStart(4, '0')}`);
+    }
+}
+  // ================================================================
+
+  // ==================== 編集文字数（derived） ====================
+  const totalEdited = $derived(
+    fwState.replacedSmallFontCharacters.size + fwState.replacedLargeFontCharacters.size
+  );
+
+
+  // ==================== Smallのみ反映 ====================
+  async function applyAllSmall() {
+    const count = await fwState.applyAllSmallFonts();
+    if (count > 0) {
+      alert(`✅ Small fonts applied: ${count} glyphs`);
+    }
+  }
+
+  // ==================== Largeのみ反映 ====================
+  async function applyAllLarge() {
+    const count = await fwState.applyAllLargeFonts();
+    if (count > 0) {
+      alert(`✅ Large fonts applied: ${count} glyphs`);
+    }
+  }
+
+// ==================== .imgダウンロード（重要修正） ====================
+    async function downloadFirmware() {
+        if (fwState.isProcessing) return;
+
+        try {
+            // 編集内容を強制的にWorkerに同期
+            if (fwState.replacedSmallFontCharacters.size > 0 || 
+                fwState.replacedLargeFontCharacters.size > 0) {
+                console.log("🔄 ダウンロード前に編集内容を同期中...");
+                await fwState.forceSyncAllEditedFonts();
+            }
+
+            // 通常のダウンロード処理を実行
+            await fwState.exportFirmware();
+        } catch (err) {
+            console.error("ダウンロード処理エラー:", err);
+            alert("An error occurred while downloading the firmware.");
+        }
+    }
+    // =============================================================
+
+  const importLabel = $derived(fwState.selectedNode?.type === "plane" ? "import image" : "import image");
   const canExportImage = $derived(fwState.selectedNode?.type === "image" && !!fwState.imageData);
   const availableColors = $derived(DEVICE_COLORS[fwState.firmwareType] ?? []);
 
@@ -180,7 +329,13 @@
     if (!q) return null;
     return fwState.imageList
       .filter(img => img.name.toLowerCase().includes(q))
-      .map((img, i) => ({ id: `search-${i}`, label: img.name, type: 'image' as const, data: img, children: [] }));
+      .map((img, i) => ({ 
+        id: `search-${i}`, 
+        label: img.name, 
+        type: 'image' as const, 
+        data: img, 
+        children: [] 
+      }));
   });
 </script>
 
@@ -191,40 +346,18 @@
   <LoadingWindow title={fwState.loadingTitle} message={fwState.statusMessage} progress={fwState.progress} />
 {/if}
 
-<!-- landing screen -->
+<!-- drop screen -->
 {#if !fwState.originalFirmwareData && !fwState.isProcessing}
-  <div class="landing" class:drag-active={isDragOver}
-    ondragover={handleDragOver} ondragleave={handleDragLeave} ondrop={handleDrop}>
-    <div class="landing-inner">
-      <button class="landing-brand" onclick={cycleTheme} title="cycle theme → {currentTheme.label}">
-        oflame<span class="landing-dot">.</span>reign
-      </button>
-      <p class="landing-sub">firmware image editor for snowsky echo &amp; echo mini</p>
-      <div class="landing-divider"></div>
-      <div class="landing-cards">
-        <button class="lcard" onclick={() => fileInput?.click()}>
-          <div class="lcard-icon"><i class="fa-solid fa-pen-to-square"></i></div>
-          <div class="lcard-title">customize firmware</div>
-          <div class="lcard-desc">open a <code>.img</code> file and edit images, fonts, and colors</div>
-        </button>
-        <button class="lcard" onclick={() => (showThemeMover = true)}>
-          <div class="lcard-icon"><i class="fa-solid fa-palette"></i></div>
-          <div class="lcard-title">theme mover</div>
-          <div class="lcard-desc">copy a theme from one firmware to another</div>
-        </button>
-      </div>
-      {#if isDragOver}
-        <div class="landing-drop-hint">drop to load firmware</div>
-      {/if}
-    </div>
-    <div class="landing-footer">
-      <div class="lf-sites">
-        <button class="lf-link" onclick={() => window.open('https://spark.reign.fyi', '_blank', 'noopener')} title="spark — theme maker">spark.reign.fyi</button>
-        <span class="lf-sep">·</span>
-        <button class="lf-link" onclick={() => window.open('https://oflame.reign.fyi', '_blank', 'noopener')} title="oflame — firmware image editor">oflame.reign.fyi</button>
-      </div>
-      <button class="lf-link lf-kofi" onclick={() => window.open('https://ko-fi.com/U7U41U5JQ', '_blank', 'noopener')}>support on ko-fi ♥</button>
-      <div class="lf-version">{APP_VERSION}</div>
+  <div class="drop-screen" class:active={isDragOver}
+    ondragover={handleDragOver} ondragleave={handleDragLeave} ondrop={handleDrop}
+    onclick={() => fileInput?.click()}
+    onkeydown={(e) => (e.key === "Enter" || e.key === " ") && fileInput?.click()}
+    role="button" tabindex="0">
+    <div class="drop-card">
+      <div class="drop-logo">GlyphFlame<span class="drop-dot"></span></div>
+      <p class="drop-sub">Font Editor for Snowsky Echo(non-mini)</p>
+      <div class="drop-divider"></div>
+      <div class="drop-hint">drop <code>.img</code> firmware here or click to browse</div>
     </div>
   </div>
 {/if}
@@ -237,7 +370,7 @@
     <header class="header">
       <div class="hd-left">
         <button class="hd-brand" onclick={cycleTheme} title="cycle theme → {currentTheme.label}">
-          oflame<span class="hd-dot">.</span>reign
+          GlyphFlame<span class="hd-dot"></span>
         </button>
         <span class="hd-sep">/</span>
         <span class="hd-file">{fwState.loadedFileName}</span>
@@ -324,9 +457,13 @@
               <span class="panel-meta">U+{fwState.planeData.start.toString(16).toUpperCase()}–U+{fwState.planeData.end.toString(16).toUpperCase()} · {fwState.planeData.fonts.length} glyphs</span>
             </div>
             <div class="panel-scroll">
-              <FontGridRenderer fonts={fwState.planeData.fonts} zoom={10}
+              <FontGridRenderer 
+                fonts={fwState.planeData.fonts} 
+                zoom={10}
                 replacedSmallChars={fwState.replacedSmallFontCharacters}
-                replacedLargeChars={fwState.replacedLargeFontCharacters} />
+                replacedLargeChars={fwState.replacedLargeFontCharacters}
+                on:update={handleFontUpdate}
+              />
             </div>
           </div>
 
@@ -357,11 +494,14 @@
             <span class="empty-text">select a resource from the sidebar</span>
           </div>
         {/if}
+
       </main>
 
       <!-- col 3: tools -->
       <aside class="col col-tools">
-        <div class="tg" style="padding-top:16px">
+        <div class="col-label">tools</div>
+
+        <div class="tg">
           <div class="tg-label">selected</div>
           <div class="tg-filename">{fwState.imageData?.name ?? fwState.selectedNode?.label ?? '—'}</div>
         </div>
@@ -371,11 +511,6 @@
           <button class="tbtn" onclick={() => editFileInput?.click()} disabled={fwState.isProcessing}>
             <i class="fa-solid fa-upload"></i> {importLabel}
           </button>
-          <div class="import-drop" class:drag-over={isImageDragOver}
-            ondragover={handleImageDragOver} ondragleave={handleImageDragLeave} ondrop={handleImageDrop}
-            role="presentation">
-            drop image / font here
-          </div>
           <button class="tbtn" onclick={exportCurrentImage} disabled={!canExportImage}>
             <i class="fa-solid fa-download"></i> export image
           </button>
@@ -385,7 +520,37 @@
         </div>
 
         <div class="tg">
-          <div class="tg-label">tools</div>
+          <div class="tg-label">firmware</div>
+          <button class="tbtn tbtn-accent" onclick={downloadFirmware} disabled={fwState.isProcessing}>
+            <i class="fa-solid fa-floppy-disk"></i> 
+            download .img
+            {#if fwState.replacedSmallFontCharacters.size + fwState.replacedLargeFontCharacters.size > 0}
+              <span style="margin-left: 8px; font-size: 10px; opacity: 0.85;">
+                ({fwState.replacedSmallFontCharacters.size + fwState.replacedLargeFontCharacters.size})
+              </span>
+            {/if}
+          </button>
+          
+          <!-- Small / Large 分別反映 -->
+    <button class="tbtn" onclick={applyAllSmall} 
+                  disabled={fwState.replacedSmallFontCharacters.size === 0}>
+            <i class="fa-solid fa-check"></i> Apply Small ({fwState.replacedSmallFontCharacters.size})
+          </button>
+
+    <button class="tbtn" onclick={applyAllLarge} 
+                  disabled={fwState.replacedLargeFontCharacters.size === 0}>
+            <i class="fa-solid fa-check"></i> Apply Large ({fwState.replacedLargeFontCharacters.size})
+          </button>
+
+          
+          <button class="tbtn" 
+                  onclick={async () => await fwState.alignAllGlyphsLeft()}
+                  disabled={fwState.isProcessing || !fwState.planeData}>
+            <i class="fa-solid fa-align-left"></i> 
+            Align All Left
+          </button>
+
+          
           <button class="tbtn" onclick={() => (showSequenceReplacer = true)} disabled={fwState.imageList.length === 0}>
             <i class="fa-solid fa-arrows-rotate"></i> sequence replacer
           </button>
@@ -394,27 +559,25 @@
           </button>
         </div>
 
-        <div class="tg tg-save">
-          <div class="tg-label">save</div>
-          <button class="tbtn tbtn-accent tbtn-save" onclick={() => fwState.exportFirmware()} disabled={fwState.isProcessing}>
-            <i class="fa-solid fa-floppy-disk"></i> download .img
-          </button>
-        </div>
-
         <div class="tg tg-footer">
-          <button class="tbtn" onclick={() => (showOpenConfirm = true)}>
+          <button class="tbtn" onclick={() => fileInput?.click()}>
             <i class="fa-solid fa-folder-open"></i> open firmware
           </button>
-          <div class="tg-meta">
-            <button class="meta-link" onclick={() => (showInstallModal = true)}>guide</button>
-            <span class="meta-sep">·</span>
-            <button class="meta-link" onclick={() => (showAboutModal = true)}>about</button>
+          <div class="tg-row2">
+            <button class="tbtn tbtn-sm" onclick={() => (showInstallModal = true)}>
+              <i class="fa-solid fa-list-check"></i> guide
+            </button>
+            <button class="tbtn tbtn-sm" onclick={() => (showAboutModal = true)}>
+              <i class="fa-solid fa-circle-info"></i> about
+            </button>
           </div>
         </div>
       </aside>
     </div>
   </div>
 {/if}
+
+          
 
 <!-- install modal -->
 {#if showInstallModal}
@@ -457,39 +620,27 @@
 {#if showAboutModal}
   <div class="modal-back" onclick={(e) => e.target === e.currentTarget && (showAboutModal = false)}>
     <div class="modal">
-      <div class="modal-head">about oflame</div>
+      <div class="modal-head">about GlyphFlame</div>
       <div class="modal-body">
-        <div class="ab-title">oflame<span class="ab-ver">{APP_VERSION}</span></div>
-        <p class="ab-desc">firmware image editor for snowsky echo and echo mini. fork of flameocean with echo (non-mini) support and a redesigned ui.</p>
+        <div class="ab-title">GlyphFlame<span class="ab-ver">v0.1</span></div>
+        <p class="ab-desc">A web-based font editor for Snowsky Echo / Echo Mini firmware. Specialized tool for editing bitmap fonts (SMALL / LARGE) in firmware images.</p>
         <div class="ab-links">
+          <a class="ab-link" href="https://github.com/SIEBEN5106/glyph-flame" target="_blank" rel="noopener">
+            <i class="fa-brands fa-github"></i>
+            <div>
+              <div class="ab-link-title">GlyphFlame (this fork)</div>
+              <div class="ab-link-sub">github.com/SIEBEN5106/glyph-flame</div>
+            </div>
+          </a>
           <a class="ab-link" href="https://github.com/unitreign/ocean-flame" target="_blank" rel="noopener">
             <i class="fa-brands fa-github"></i>
             <div>
-              <div class="ab-link-title">oflame (this fork)</div>
+              <div class="ab-link-title">oflame (original)</div>
               <div class="ab-link-sub">github.com/unitreign/ocean-flame</div>
             </div>
           </a>
-          <a class="ab-link" href="https://github.com/Losses/flame-ocean-website" target="_blank" rel="noopener">
-            <i class="fa-brands fa-github"></i>
-            <div>
-              <div class="ab-link-title">flameocean (original — echo mini)</div>
-              <div class="ab-link-sub">github.com/Losses/flame-ocean-website</div>
-            </div>
-          </a>
-          <a class="ab-link" href="https://www.youtube.com/watch?v=p8HDWJaDaP4" target="_blank" rel="noopener">
-            <i class="fa-brands fa-youtube"></i>
-            <div>
-              <div class="ab-link-title">basic theming guide</div>
-              <div class="ab-link-sub">youtube.com/watch?v=p8HDWJaDaP4</div>
-            </div>
-          </a>
-          <a class="ab-link ab-link-kofi" href="https://ko-fi.com/U7U41U5JQ" target="_blank" rel="noopener">
-            <i class="fa-solid fa-mug-hot kofi-cup"></i>
-            <div>
-              <div class="ab-link-title">support on ko-fi</div>
-              <div class="ab-link-sub">ko-fi.com/unitreign</div>
-            </div>
-          </a>
+          
+         
         </div>
       </div>
       <div class="modal-foot">
@@ -547,85 +698,23 @@
   </div>
 {/if}
 
-{#if showOpenConfirm}
-  <div class="modal-back" onclick={(e) => e.target === e.currentTarget && (showOpenConfirm = false)}>
-    <div class="modal">
-      <div class="modal-head">open firmware</div>
-      <div class="modal-body">
-        <p class="confirm-msg">Opening a new firmware will discard all unsaved changes
-          {#if fwState.replacedImages.length > 0}
-            — including <strong class="confirm-count">{fwState.replacedImages.length} replaced image{fwState.replacedImages.length !== 1 ? 's' : ''}</strong>
-          {/if}.
-          Download the current <code>.img</code> first if you want to keep your work.
-        </p>
-      </div>
-      <div class="modal-foot">
-        <button class="mbtn" onclick={() => (showOpenConfirm = false)}>cancel</button>
-        <button class="mbtn mbtn-danger" onclick={() => { showOpenConfirm = false; fileInput?.click(); }}>discard &amp; open</button>
-      </div>
-    </div>
-  </div>
-{/if}
-
-{#if showThemeMover}
-  <ThemeMover
-    onComplete={(data, name) => { showThemeMover = false; fwState.loadFirmwareFromBuffer(data, name); }}
-    onClose={() => (showThemeMover = false)}
-  />
-{/if}
-
 <style>
-  /* ── landing screen ── */
-  .landing {
-    position: fixed; inset: 0; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    background: var(--bg);
+  /* ── drop screen ── */
+  .drop-screen {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); cursor: pointer; outline: none;
   }
-  .landing.drag-active .landing-inner { border-color: var(--accent); }
-  .landing-inner {
-    border: 1px solid var(--border); border-radius: 5px; padding: 40px 48px;
-    max-width: 520px; width: 100%; transition: border-color 0.2s; position: relative;
+  .drop-card {
+    border: 1px solid var(--border); border-radius: 5px; padding: 40px 56px;
+    max-width: 420px; width: 100%; transition: border-color 0.2s;
   }
-  .landing-brand {
-    background: none; border: none; cursor: pointer; padding: 0;
-    font-family: 'DM Mono', monospace; font-size: 22px; font-weight: 500;
-    color: var(--text); letter-spacing: -0.3px; transition: color 0.2s; display: block;
-    margin-bottom: 8px;
-  }
-  .landing-brand:hover { color: var(--accent); }
-  .landing-dot { color: var(--accent); }
-  .landing-sub { font-size: 11px; color: var(--text-dim); margin-bottom: 20px; line-height: 1.6; }
-  .landing-divider { height: 1px; background: var(--border); margin-bottom: 20px; }
-  .landing-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .lcard {
-    border: 1px solid var(--border); border-radius: 4px; padding: 20px 16px;
-    background: none; cursor: pointer; text-align: left;
-    display: flex; flex-direction: column; gap: 8px;
-    font-family: 'DM Mono', monospace; transition: border-color 0.2s, background 0.15s;
-  }
-  .lcard:hover { border-color: var(--accent); background: var(--accent-bg); }
-  .lcard-icon { font-size: 16px; color: var(--accent); opacity: 0.7; }
-  .lcard-title { font-size: 13px; color: var(--text); font-weight: 500; }
-  .lcard-desc { font-size: 11px; color: var(--text-dim); line-height: 1.55; }
-  .lcard-desc code { font-family: 'DM Mono', monospace; font-size: 10px; color: var(--text); background: var(--surface2); padding: 1px 4px; border-radius: 3px; border: 1px solid var(--border); }
-  .landing-drop-hint {
-    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-    background: rgba(0,0,0,0.5); border-radius: 5px;
-    font-size: 14px; color: var(--accent); letter-spacing: 0.5px;
-  }
-  .landing-footer {
-    margin-top: 20px; display: flex; flex-direction: column;
-    align-items: center; gap: 5px;
-  }
-  .lf-sites { display: flex; align-items: center; gap: 7px; }
-  .lf-link {
-    background: none; border: none; padding: 0; cursor: pointer;
-    font-family: 'DM Mono', monospace; font-size: 11px;
-    color: var(--text-faint); transition: color 0.15s;
-  }
-  .lf-link:hover { color: var(--accent); }
-  .lf-sep { font-size: 10px; color: var(--text-faint); }
-  .lf-version { font-size: 10px; color: var(--text-faint); letter-spacing: 0.5px; margin-top: 1px; }
+  .drop-screen:hover .drop-card, .drop-screen.active .drop-card { border-color: var(--accent); }
+  .drop-logo { font-size: 22px; font-weight: 500; color: var(--text); margin-bottom: 8px; letter-spacing: -0.3px; }
+  .drop-dot { color: var(--accent); }
+  .drop-sub { font-size: 11px; color: var(--text-dim); margin-bottom: 20px; line-height: 1.6; }
+  .drop-divider { height: 1px; background: var(--border); margin-bottom: 20px; }
+  .drop-hint { font-size: 12px; color: var(--text-dim); }
+  .drop-hint code { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text); background: var(--surface2); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border); }
 
   /* ── app ── */
   .app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -674,7 +763,7 @@
     color: var(--text-dim); flex-shrink: 0;
   }
 
-  /* ── search ── */
+  /* search & tree styles (省略せず全文) */
   .search-wrap {
     position: relative; padding: 4px 12px 8px; flex-shrink: 0;
     border-bottom: 1px solid var(--border);
@@ -707,7 +796,7 @@
   .tree-row:hover { background: var(--surface2); color: var(--text); }
   .tree-row.selected { color: var(--accent); background: var(--accent-bg); }
 
-  /* ── tree view styles ── */
+  /* tree-view styles */
   .tree-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 4px 0; }
   .tree-scroll :global(.tree-view) { font-size: 12px; color: var(--text-dim); }
   .tree-scroll :global(li) { list-style: none; }
@@ -737,7 +826,7 @@
   .tree-scroll :global(details > ul) { padding-left: 10px; border-left: 1px solid var(--border); margin-left: 10px; }
   .tree-scroll :global(details > ul .leaf-node) { padding-left: 16px !important; }
 
-  /* ── main col ── */
+  /* main view styles */
   .col-main {
     background: var(--bg); overflow: hidden; display: flex; flex-direction: column;
     position: relative; min-height: 0;
@@ -781,24 +870,16 @@
   .empty-arrow { color: var(--accent); font-size: 12px; }
   .empty-text { font-size: 12px; color: var(--text-faint); }
 
-  /* ── tools col ── */
+  /* tools column */
   .tg { padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
   .tg-footer { border-bottom: none; }
-  .tg-save { border-top: 1px solid var(--border2); margin-top: auto; }
   .tg-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.4px; color: var(--text-dim); margin-bottom: 3px; }
   .tg-filename {
     font-size: 11px; color: var(--text-dim); padding: 5px 0;
     border-bottom: 1px solid var(--border); white-space: nowrap;
     overflow: hidden; text-overflow: ellipsis;
   }
-  .tg-meta { display: flex; align-items: center; gap: 6px; padding-top: 2px; }
-  .meta-link {
-    background: none; border: none; padding: 0; cursor: pointer;
-    font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text-faint);
-    transition: color 0.15s;
-  }
-  .meta-link:hover { color: var(--text-dim); }
-  .meta-sep { color: var(--text-faint); font-size: 10px; }
+  .tg-row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 
   .tbtn {
     display: flex; align-items: center; gap: 8px; padding: 7px 0;
@@ -815,19 +896,8 @@
   .tbtn-accent:hover:not(:disabled) { opacity: 1; }
   .tbtn-sm { font-size: 11px; justify-content: center; border: 1px solid var(--border); border-radius: 3px; padding: 5px 8px; }
   .tbtn-sm:hover:not(:disabled) { border-color: var(--text-dim); }
-  .tbtn-save { font-size: 13px; padding: 10px 0; letter-spacing: 0.2px; }
 
-  .import-drop {
-    border: 1px dashed var(--border); border-radius: 3px; padding: 8px 10px;
-    font-size: 11px; color: var(--text-faint); text-align: center;
-    transition: border-color 0.2s, color 0.2s, background 0.2s;
-    cursor: default; user-select: none;
-  }
-  .import-drop.drag-over {
-    border-color: var(--accent); color: var(--accent); background: var(--accent-bg);
-  }
-
-  /* ── modals ── */
+  /* modals */
   .modal-back {
     position: fixed; inset: 0; background: rgba(0,0,0,0.6);
     display: flex; align-items: center; justify-content: center; z-index: 10000;
@@ -853,10 +923,6 @@
     padding: 3px 0; cursor: pointer; transition: opacity 0.15s;
   }
   .mbtn:hover { opacity: 0.7; }
-  .mbtn-danger { color: var(--danger); border-bottom-color: var(--danger); }
-  .confirm-msg { font-size: 12px; color: var(--text-dim); line-height: 1.65; }
-  .confirm-msg code { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--text); background: var(--surface2); padding: 1px 4px; border-radius: 3px; border: 1px solid var(--border); }
-  .confirm-count { color: var(--accent); font-weight: 500; }
 
   /* install guide */
   .modal-devices { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -892,23 +958,4 @@
     color: var(--text-dim); transition: color 0.15s;
   }
   .ab-link:last-child { border-bottom: none; }
-  .ab-link:hover { color: var(--accent); }
-  .ab-link-kofi { border-color: var(--accent); opacity: 0.8; }
-  .ab-link-kofi:hover { opacity: 1; border-color: var(--accent2); }
-  .kofi-cup {
-    width: 22px; height: 15px; flex-shrink: 0;
-    animation: kofi-wiggle 3s infinite;
-  }
-  @keyframes kofi-wiggle {
-    0%,60%,100% { transform: rotate(0) scale(1); }
-    75%          { transform: rotate(0) scale(1.12); }
-    80%          { transform: rotate(0) scale(1.1); }
-    84%          { transform: rotate(-10deg) scale(1.1); }
-    88%          { transform: rotate(10deg) scale(1.1); }
-    92%          { transform: rotate(-10deg) scale(1.1); }
-    96%          { transform: rotate(10deg) scale(1.1); }
-  }
-  .ab-link-title { font-size: 12px; color: var(--text); margin-bottom: 2px; }
-  .ab-link:hover .ab-link-title { color: var(--accent); }
-  .ab-link-sub { font-size: 10px; color: var(--text-faint); }
 </style>
