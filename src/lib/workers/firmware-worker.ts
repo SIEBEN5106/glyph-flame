@@ -1598,6 +1598,95 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>): Promise<void> => {
         break;
       }
 
+// =========================================================================
+// 1文字だけフォントを更新（FontGridRenderer用）
+// =========================================================================
+case "updateSingleFont": {
+    if (!firmwareData) {
+        self.postMessage({ type: "error", id: e.data.id, error: "Firmware not loaded" });
+        return;
+    }
+
+    const { unicode, fontType, pixels, id } = e.data;   // ← e.data を使う
+
+    try {
+        // boolean[][] → V8エンコード
+        const encoded = encodeV8(pixels, fontType);
+
+        const addrInfo = getFontAddress(unicode, fontType, SMALL_BASE, LARGE_BASE);
+
+        if (!addrInfo.valid) {
+            throw new Error(`Invalid address for ${fontType} U+${unicode.toString(16).padStart(4, '0')}`);
+        }
+
+        const result = writeEncodedFont(firmwareData, encoded, addrInfo, unicode);
+
+        self.postMessage({
+            type: result.success ? "success" : "error",
+            id: id,
+            result: result.success
+        });
+    } catch (err) {
+        self.postMessage({
+            type: "error",
+            id: id,
+            error: err instanceof Error ? err.message : String(err)
+        });
+    }
+    break;
+}
+
+// =========================================================================
+// BDF用：複数フォントを一括更新（高速化）
+// =========================================================================
+case "updateFontsBatch": {
+    if (!firmwareData) {
+        self.postMessage({ type: "error", id: e.data.id, error: "Firmware not loaded" });
+        return;
+    }
+
+    const { updates, id } = e.data as {
+        id: string;
+        updates: Array<{ unicode: number; fontType: 'SMALL' | 'LARGE'; pixels: boolean[][] }>;
+    };
+
+    let successCount = 0;
+
+    try {
+        for (const item of updates) {
+            const encoded = encodeV8(item.pixels, item.fontType);
+            const addrInfo = getFontAddress(item.unicode, item.fontType, SMALL_BASE, LARGE_BASE);
+
+            if (addrInfo.valid) {
+                const result = writeEncodedFont(firmwareData, encoded, addrInfo, item.unicode);
+                if (result.success) successCount++;
+            }
+        }
+
+        self.postMessage({
+            type: "success",
+            id: id,
+            result: { successCount, total: updates.length }
+        });
+    } catch (err) {
+        self.postMessage({
+            type: "error",
+            id: id,
+            error: err instanceof Error ? err.message : String(err)
+        });
+    }
+    break;
+}
+
+case "syncAllEditedFonts": {
+    // 現在はダミーでもOK（将来的に強化）
+    self.postMessage({ 
+        type: "success", 
+        id: data.id 
+    });
+    break;
+}
+
       case "patchTheme": {
         const { firmware, flacColors, menuColors } = e.data as WorkerRequest & {
           firmware: Uint8Array;
