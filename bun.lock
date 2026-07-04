@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "flame-ocean",
+      "name": "glyph-flame",
       "dependencies": {
         "98.css": "^0.1.21",
         "clsx": "^2.1.1",
