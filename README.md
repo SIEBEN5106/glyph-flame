@@ -1,54 +1,64 @@
-# Ocean Flame
+# Glyph Flame
 
-A web-based firmware image editor for Snowsky Echo and Echo Mini devices. Fork of [FlameOcean](https://github.com/Losses/flame-ocean-website) with Echo (non-Mini) support.
+A web-based **font editor** for Snowsky Echo / Echo Mini firmware.
+Specialized tool for editing bitmap fonts (SMALL / LARGE) in firmware images.
 
-**Latest:** [ocean-flame-nu.vercel.app](https://ocean-flame-nu.vercel.app)
-**Legacy (Win98 UI):** [ocean-flame-legacy.vercel.app](https://ocean-flame-legacy.vercel.app)
+Fork of [ocean-flame](https://github.com/unitreign/ocean-flame)
+
+
+<img width="1919" height="945" alt="スクリーンショット " src="https://github.com/user-attachments/assets/f46dd60d-0206-4c3d-8886-99054b0e533b" />
+
+
+
+
+
 
 ## Features
 
-### Latest
-- **Redesigned UI** — Clean modern interface with 6 web app themes (Catppuccin Mocha, Frappé, Macchiato, Latte, Dark Orange, Parchment). Click the app name to cycle themes. Last used theme is remembered. These are UI themes for the web tool — not related to the device firmware.
-- **Device Mockup** — Selected images render inside an Echo or Echo Mini device frame. Toggle the frame on/off, switch between device color variants
-- **Image Categories** — Images organized into named categories (Shared, Light Theme, Dark Theme) with subcategories like Main Menu, Status Bar, Now Playing, Volume Control, and more
-- **Image Search** — Search images by name in the sidebar
-- **Installation Guide & About** — Built into the tools panel
-- **Auto firmware type detection** — Echo, Echo Mini, or unknown — the tree and mockup adapt accordingly
+- **Font Plane Viewer** — Browse and edit glyphs by Unicode plane (Hiragana, CJK, etc.)
+- **BDF Import** — Import bitmap fonts from `.bdf` files (Unicode supported)
+- **Glyph Editor** — Pixel-level editing with grid guide, range selection, and keyboard movement
+- **Batch Operations** — Align all glyphs to left, apply Small/Large fonts separately
+- **Live Preview** — See changes in real-time
+- **Firmware Export** — Download modified `.img` file with updated fonts
 
-### Legacy & Latest (both versions)
-- **Firmware Analysis** — Parse and analyze Snowsky Echo and Echo Mini firmware files
-- **Image Viewing** — View embedded UI images in RGB565 format
-- **Image Replacement** — Replace images via drag-and-drop, paste (Ctrl+V), or file picker
-- **Font Viewing & Replacement** — View SMALL/LARGE font glyphs by Unicode plane, replace with custom bitmap fonts
-- **Sequence Replacer** — Batch-replace a sequence of images by filename matching or video frame extraction
-- **Export Single Image** — Export the selected image as PNG
-- **Export All Images** — Download all images as a ZIP for offline editing
-- **Download Modified Firmware** — Exports as `.img` with the original firmware's filename
-- **Color Editing** — View and edit theme colors (Progress Bar, Marquee, FLAC) where supported
 
 ## Tech Stack
 
 - Svelte 5 + SvelteKit
 - TypeScript
 - Web Workers for heavy processing
-- Font Awesome 6 (latest only)
+- Font Awesome 6
+
 
 ## Usage
 
-1. Drop a firmware `.img` file onto the page or click to browse
-2. Firmware type (Echo or Echo Mini) is auto-detected
-3. Browse or search the sidebar to find images or fonts
-4. Select an image — it renders inside the device mockup. Toggle the frame on/off above the viewer
-5. Replace by dragging a new image onto the viewer, pasting, or using Import Image
-6. Download modified firmware with Ctrl+S or the Download .img button
+1. Open a firmware `.img` file
+2. Select a font plane (Hiragana, CJK Unified Ideographs, etc.)
+3. Drag & drop a compatible BDF font file
+4. Edit glyphs individually or use batch tools
+5. Click **"Apply This Glyph"** or **"Apply Small/Large"** to commit changes
+6. Download the modified firmware with **"Download .img"**
+
+
+## Key Functions
+
+- **Align All Left** — Left-align all glyphs while preserving shape
+- **Range Selection** — Drag to select multiple pixels, move with arrow keys
+- **Grid Guide** — Toggle on/off for precise editing
+- **BDF Import** — Supports Unicode encoded fonts
+
 
 ## Compatibility
 
 | Device | Status |
 |---|---|
-| Snowsky Echo | ✅ Tested on V1.5.0 firmware |
-| Snowsky Echo Mini | ✅ Original FlameOcean compatibility |
+| Snowsky Echo | ✅ Tested on V1.6.0 firmware |
+| Snowsky Echo Mini | ⚠ May work, untested |
 | Other Rockchip RKnano devices | ⚠ May work, untested |
+
+> **Note**: This tool has only been verified to work properly on Echo (non-Mini). Use on Echo Mini at your own risk.
+
 
 ## Installation Guide
 
@@ -58,6 +68,7 @@ Short version: remove SD card → turn on → connect USB → USB Data mode → 
 
 > ⚠ The firmware upgrade may format the internal memory. Back up your songs before upgrading.
 
+
 ## WARNING
 
 **This tool modifies device firmware. Improper use may brick your device.**
@@ -66,14 +77,17 @@ Short version: remove SD card → turn on → connect USB → USB Data mode → 
 - Replacement images must match the exact dimensions of the original
 - Flash at your own risk — no recovery guarantee
 
+
 ## Support
 
 Provided as-is. No support, troubleshooting, or compensation for bricked devices.
 
+
 ## Credits
 
-Forked from [FlameOcean](https://github.com/Losses/flame-ocean-website) by [Losses](https://github.com/Losses).
-Theming guide: [youtube.com/watch?v=p8HDWJaDaP4](https://www.youtube.com/watch?v=p8HDWJaDaP4)
+Forked from [FlameOcean](https://github.com/unitreign/ocean-flame) by [unitreign](https://github.com/unitreign).
+
+
 
 ## Development
 
@@ -81,6 +95,7 @@ Theming guide: [youtube.com/watch?v=p8HDWJaDaP4](https://www.youtube.com/watch?v
 bun install
 bun run dev
 ```
+
 
 ## Building
 
