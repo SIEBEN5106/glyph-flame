@@ -1,3 +1,4 @@
+import { parseBDF } from './bdf-parser';   // ← これを追加！
 import FirmwareWorker from "$lib/workers/firmware-worker.ts?worker";
 import {
   unloadFontFile,
@@ -1183,29 +1184,6 @@ export class FirmwareState {
     }
   }
 
-  loadFirmwareFromBuffer(firmwareData: Uint8Array, filename: string) {
-    this.isProcessing = true;
-    this.progress = 10;
-    this.statusMessage = `Loading ${filename}...`;
-    this.loadedFileName = filename.replace(/\.(img|bin)$/i, '');
-
-    this.originalFirmwareData = new Uint8Array(firmwareData);
-    this.replacedImages = [];
-    this.replacedSmallFontCharacters = new Set();
-    this.replacedLargeFontCharacters = new Set();
-
-    this.progress = 30;
-    this.statusMessage = "Analyzing firmware...";
-
-    this.worker!.postMessage({
-      type: "analyze",
-      id: "analyze",
-      firmware: firmwareData,
-    });
-
-    this.progress = 100;
-  }
-
   showWarningDialog(title: string, message: string) {
     this.warningTitle = title;
     this.warningMessage = message;
@@ -1675,6 +1653,174 @@ export class FirmwareState {
     }
   }
 
+/**
+ * BDF対応版：1文字フォント更新（配列のdeep clone対応）
+ */
+async updateSingleFont(
+    unicode: number,
+    fontType: 'SMALL' | 'LARGE',
+    pixels: boolean[][]
+): Promise<boolean> {
+    if (!this.worker) {
+        console.error("Worker not initialized");
+        return false;
+    }
+
+    // 重要：Workerに渡す前に安全なディープコピーを作成
+    const safePixels = pixels.map(row => [...row]);
+
+    return new Promise((resolve) => {
+        const messageId = `updateFont_${unicode}`;
+
+        const handler = (e: MessageEvent) => {
+            const { type, id, error } = e.data;
+            if (id === messageId) {
+                this.worker?.removeEventListener("message", handler);
+
+                if (type === "success") {
+                    if (fontType === 'SMALL') {
+                        this.replacedSmallFontCharacters.add(unicode);
+                    } else {
+                        this.replacedLargeFontCharacters.add(unicode);
+                    }
+                    resolve(true);
+                } else {
+                    console.error(`Font update failed:`, error);
+                    resolve(false);
+                }
+            }
+        };
+
+        this.worker.addEventListener("message", handler);
+
+        this.worker.postMessage({
+            type: "updateSingleFont",
+            id: messageId,
+            unicode,
+            fontType,
+            pixels: safePixels   // ← ここで安全なコピーを渡す
+        });
+    });
+}
+
+/**
+ * ダウンロード前に全編集内容を強制同期（デバッグ用）
+ */
+async forceSyncAllEditedFonts(): Promise<void> {
+    console.log(`🔄 強制同期開始: 小文字 ${this.replacedSmallFontCharacters.size} + 大文字 ${this.replacedLargeFontCharacters.size}文字`);
+
+    if (!this.worker) {
+        console.error("Workerが存在しません");
+        return;
+    }
+
+    // 現在の planeData から全編集済み文字を再適用
+    if (this.planeData) {
+        for (const font of this.planeData.fonts) {
+            const isEdited = 
+                (font.fontType === 'SMALL' && this.replacedSmallFontCharacters.has(font.unicode)) ||
+                (font.fontType === 'LARGE' && this.replacedLargeFontCharacters.has(font.unicode));
+
+            if (isEdited) {
+                await this.updateSingleFont(font.unicode, font.fontType, font.pixels);
+            }
+        }
+    }
+
+    console.log("✅ 強制同期完了");
+}
+
+/**
+ * すべての編集済みフォントを一括反映
+ */
+async applyAllEditedFonts(): Promise<boolean> {
+    if (!this.planeData || !this.worker) return false;
+
+    const updates: any[] = [];
+
+    // 編集済み文字を収集
+    for (const unicode of this.replacedSmallFontCharacters) {
+        const font = this.planeData.fonts.find(f => f.unicode === unicode);
+        if (font) {
+            updates.push({ unicode, fontType: 'SMALL' as const, pixels: font.pixels });
+        }
+    }
+    for (const unicode of this.replacedLargeFontCharacters) {
+        const font = this.planeData.fonts.find(f => f.unicode === unicode);
+        if (font) {
+            updates.push({ unicode, fontType: 'LARGE' as const, pixels: font.pixels });
+        }
+    }
+
+    if (updates.length === 0) return false;
+
+    // 一括反映（Workerに任せる）
+    console.log(`🔄 ${updates.length}文字を一括反映中...`);
+
+    // ここでは簡易的に1文字ずつ呼ぶ（後でバッチ対応可）
+    for (const u of updates) {
+        await this.updateSingleFont(u.unicode, u.fontType, u.pixels);
+    }
+
+    console.log(`✅ 全 ${updates.length}文字を反映完了`);
+    return true;
+}
+
+/**
+ * Smallフォントだけ一括反映
+ */
+async applyAllSmallFonts(): Promise<number> {
+    return await this.applyFontsByType('SMALL');
+}
+
+/**
+ * Largeフォントだけ一括反映
+ */
+async applyAllLargeFonts(): Promise<number> {
+    return await this.applyFontsByType('LARGE');
+}
+
+/**
+ * 内部処理
+ */
+private async applyFontsByType(fontType: 'SMALL' | 'LARGE'): Promise<number> {
+    if (!this.planeData) return 0;
+
+    const set = fontType === 'SMALL' 
+        ? this.replacedSmallFontCharacters 
+        : this.replacedLargeFontCharacters;
+
+    if (set.size === 0) return 0;
+
+    let count = 0;
+    const batchSize = 150; // 1回に処理する文字数（フリーズ対策）
+
+    const targets = this.planeData.fonts.filter(f => 
+        f.fontType === fontType && set.has(f.unicode)
+    );
+
+    console.log(`🔄 ${fontType}フォント ${targets.length}文字を反映中...`);
+
+    for (let i = 0; i < targets.length; i += batchSize) {
+        const batch = targets.slice(i, i + batchSize);
+        
+        await Promise.all(
+            batch.map(async (font) => {
+                await this.updateSingleFont(font.unicode, font.fontType, font.pixels);
+                count++;
+            })
+        );
+
+        // 少し待機してブラウザのフリーズを防ぐ
+        if (i % 300 === 0) {
+            await new Promise(r => setTimeout(r, 10));
+        }
+    }
+
+    console.log(`✅ ${fontType}フォント ${count}文字反映完了`);
+    return count;
+}
+
   async runTofuDetectionPreview(fontFamily: string, fontSize: 12 | 16, codePoints: number[], fontData: ArrayBuffer): Promise<void> {
     const result = await detectTofu(this.worker!, { fontFamily, fontSize, codePoints, fontData });
     if (!result.success) {
@@ -2133,6 +2279,121 @@ export class FirmwareState {
       marqueeColors: uniqueMarqueeColors
     };
   }
+
+/**
+ * 現在選択中の平面の全グリフを左詰め（形を保ったまま）
+ */
+async alignAllGlyphsLeft(): Promise<{ processed: number; changed: number }> {
+    if (!this.planeData) {
+        alert("Please select a font plane first");
+        return { processed: 0, changed: 0 };
+    }
+
+    if (!confirm(`Align all glyphs to the left in "${this.planeData.name}"?\n\n(${this.planeData.fonts.length} glyphs)`)) {
+        return { processed: 0, changed: 0 };
+    }
+
+    let processed = 0;
+    let changed = 0;
+    const batchSize = 100;
+
+    console.log(`🔄 全文字左詰め開始: ${this.planeData.fonts.length}文字`);
+
+    for (let i = 0; i < this.planeData.fonts.length; i += batchSize) {
+        const batch = this.planeData.fonts.slice(i, i + batchSize);
+
+        for (const font of batch) {
+            const original = font.pixels;
+            const aligned = this.alignGlyphLeft(original);
+
+            // 変化があったかチェック
+            const isChanged = JSON.stringify(original) !== JSON.stringify(aligned);
+
+            if (isChanged) {
+                font.pixels = aligned;
+                await this.updateSingleFont(font.unicode, font.fontType, aligned);
+                changed++;
+            }
+            processed++;
+        }
+
+        console.log(`処理中... ${processed}/${this.planeData.fonts.length}文字`);
+    }
+
+    console.log(`✅ 全文字左詰め完了: ${changed}文字変更`);
+    return { processed, changed };
+}
+
+/** 1グリフを左詰め（内部用） */
+private alignGlyphLeft(pixels: boolean[][]): boolean[][] {
+    if (!pixels.length) return pixels;
+
+    const height = pixels.length;
+    const width = pixels[0].length;
+    let minX = width;
+
+    // 左端の黒ピクセル位置を検出
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            if (pixels[y][x]) {
+                minX = Math.min(minX, x);
+            }
+        }
+    }
+
+    if (minX === 0 || minX === width) return pixels; // 既に左詰め or 空
+
+    const newPixels: boolean[][] = Array(height).fill(0).map(() => Array(width).fill(false));
+
+    for (let y = 0; y < height; y++) {
+        for (let x = minX; x < width; x++) {
+            newPixels[y][x - minX] = pixels[y][x];
+        }
+    }
+
+    return newPixels;
+}
+
+async importBDF(file: File): Promise<{ imported: number; skipped: number; total: number }> {
+    if (!this.planeData) {
+        alert("⚠️ Select a font plane before importing BDF.");
+        return { imported: 0, skipped: 0, total: 0 };
+    }
+
+    try {
+        const text = await file.text();
+        const bdfGlyphs = parseBDF(text);
+
+        const fontMap = new Map(this.planeData.fonts.map(f => [f.unicode, f]));
+
+        let imported = 0;
+        let skipped = 0;
+
+        for (const bdf of bdfGlyphs) {
+            const target = fontMap.get(bdf.unicode);
+            if (target) {
+                target.pixels = bdf.pixels.map(row => [...row]);
+
+                if (target.fontType === 'SMALL') {
+                    this.replacedSmallFontCharacters.add(bdf.unicode);
+                } else {
+                    this.replacedLargeFontCharacters.add(bdf.unicode);
+                }
+                imported++;
+            } else {
+                skipped++;
+            }
+        }
+
+        console.log(`✅ Unicode BDFインポート完了: ${imported}文字更新`);
+        return { imported, skipped, total: bdfGlyphs.length };
+
+    } catch (err: any) {
+        console.error(err);
+        alert("BDF読み込み失敗");
+        return { imported: 0, skipped: 0, total: 0 };
+    }
+}
 
   async handleColorSelect(rgb: { r: number; g: number; b: number }) {
     if (!this.colorPickerTarget) return;
