@@ -80,7 +80,7 @@ Short version: remove SD card → turn on → connect USB → USB Data mode → 
 - Always back up your original firmware before making changes
 - Replacement images must match the exact dimensions of the original
 - Flash at your own risk — no recovery guarantee
-- 
+
 
 
 ## Support
