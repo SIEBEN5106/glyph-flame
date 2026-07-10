@@ -23,12 +23,24 @@ Fork of [ocean-flame](https://github.com/unitreign/ocean-flame)
 - **Firmware Export** — Download modified `.img` file with updated fonts
 
 
-## Tech Stack
+---
 
-- Svelte 5 + SvelteKit
-- TypeScript
-- Web Workers for heavy processing
-- Font Awesome 6
+## Development Note
+
+This tool was significantly enhanced using **AI assistance (Grok by xAI)** for implementing advanced editing features such as range selection, batch left-alignment, improved BDF import, and various UI/UX improvements.
+
+---
+
+
+## Compatibility
+
+| Device | Status |
+|---|---|
+| Snowsky Echo | ✅ Tested on V1.7.0 firmware |
+| Snowsky Echo Mini | ⚠ May work, untested |
+| Other Rockchip RKnano devices | ⚠ May work, untested |
+
+> **Note**: This tool has only been verified to work properly on Echo (non-Mini). Use on Echo Mini at your own risk.
 
 
 ## Usage
@@ -49,17 +61,6 @@ Fork of [ocean-flame](https://github.com/unitreign/ocean-flame)
 - **BDF Import** — Supports Unicode encoded fonts
 
 
-## Compatibility
-
-| Device | Status |
-|---|---|
-| Snowsky Echo | ✅ Tested on V1.6.0 firmware |
-| Snowsky Echo Mini | ⚠ May work, untested |
-| Other Rockchip RKnano devices | ⚠ May work, untested |
-
-> **Note**: This tool has only been verified to work properly on Echo (non-Mini). Use on Echo Mini at your own risk.
-
-
 ## Installation Guide
 
 See the in-app Installation Guide (bottom of the tools panel) for step-by-step flashing instructions.
@@ -76,11 +77,20 @@ Short version: remove SD card → turn on → connect USB → USB Data mode → 
 - Always back up your original firmware before making changes
 - Replacement images must match the exact dimensions of the original
 - Flash at your own risk — no recovery guarantee
+- 
 
 
 ## Support
 
 Provided as-is. No support, troubleshooting, or compensation for bricked devices.
+
+
+## Tech Stack
+
+- Svelte 5 + SvelteKit
+- TypeScript
+- Web Workers for heavy processing
+- Font Awesome 6
 
 
 ## Credits
