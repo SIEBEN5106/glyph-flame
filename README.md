@@ -61,6 +61,9 @@ This tool was significantly enhanced using **AI assistance (Grok by xAI)** for i
 - **BDF Import** — Supports Unicode encoded fonts
 
 
+## Tutorial
+* [日本語チュートリアル](https://github.com/SIEBEN5106/glyph-flame/blob/main/%E3%83%81%E3%83%A5%E3%83%BC%E3%83%88%E3%83%AA%E3%82%A2%E3%83%AB.md)
+
 ## Installation Guide
 
 See the in-app Installation Guide (bottom of the tools panel) for step-by-step flashing instructions.
@@ -114,7 +117,9 @@ bun run build
 ```
 
 
+
+
 ## ToDo
-* Write detailed instructions on how to use this tool.
+* Translate the Japanese tutorial.
 
 
