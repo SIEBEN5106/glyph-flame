@@ -37,6 +37,7 @@ This tool was significantly enhanced using **AI assistance (Grok by xAI)** for i
 | Device | Status |
 |---|---|
 | Snowsky Echo | ✅ Tested on V1.7.0 firmware |
+| 4GB Echo (Global Edition) | ⚠ May work, untested |
 | Snowsky Echo Mini | ⚠ May work, untested |
 | Other Rockchip RKnano devices | ⚠ May work, untested |
 
@@ -62,9 +63,10 @@ This tool was significantly enhanced using **AI assistance (Grok by xAI)** for i
 
 
 ## Tutorial
-* [日本語チュートリアル](https://github.com/SIEBEN5106/glyph-flame/blob/main/%E3%83%81%E3%83%A5%E3%83%BC%E3%83%88%E3%83%AA%E3%82%A2%E3%83%AB.md)
+How to Install this Tool, etc.
+* [チュートリアル/Tutorial](https://github.com/SIEBEN5106/glyph-flame/blob/main/%E3%83%81%E3%83%A5%E3%83%BC%E3%83%88%E3%83%AA%E3%82%A2%E3%83%AB.md)
 
-## Installation Guide
+## Firmware Installation Guide
 
 See the in-app Installation Guide (bottom of the tools panel) for step-by-step flashing instructions.
 
@@ -120,6 +122,6 @@ bun run build
 
 
 ## ToDo
-* Translate the Japanese tutorial.
+
 
 
